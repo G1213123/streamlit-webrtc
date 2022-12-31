@@ -1,3 +1,5 @@
-./models
-./runs
+models/
+runs/
+.idea/
+
 *.pt
