@@ -1,4 +1,4 @@
-import asyncio
+
 import logging
 import queue
 import threading
@@ -7,16 +7,13 @@ from pathlib import Path
 from typing import List, NamedTuple, Optional
 from sort import Sort
 import aiofiles
-import functools
-from random import randint
-from detect_and_track import draw_boxes
+
 
 import av
 import cv2
 import numpy as np
-import pandas as pd
+
 import streamlit as st
-from aiortc.contrib.media import MediaPlayer
 
 from streamlit_webrtc import (
     RTCConfiguration,
