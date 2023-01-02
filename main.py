@@ -198,7 +198,7 @@ def live_object_detection():
                     result = None
                     track_list = None
                 labels_placeholder.table( result )
-                track_placeholder.table( track_list.split() )
+                track_placeholder.table( None if track_list is None else track_list.split() )
 
     st.markdown(
         "This demo uses a model and code from "
