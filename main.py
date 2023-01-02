@@ -6,6 +6,8 @@ import urllib.request
 from pathlib import Path
 from typing import List, NamedTuple, Optional
 from sort import Sort
+import aiofiles
+import functools
 from random import randint
 from detect_and_track import draw_boxes
 
@@ -27,6 +29,37 @@ HERE = Path(__file__).parent
 
 logger = logging.getLogger(__name__)
 
+CLASSES = [
+    "background",
+    "aeroplane",
+    "bicycle",
+    "bird",
+    "boat",
+    "bottle",
+    "bus",
+    "car",
+    "cat",
+    "chair",
+    "cow",
+    "diningtable",
+    "dog",
+    "horse",
+    "motorbike",
+    "person",
+    "pottedplant",
+    "sheep",
+    "sofa",
+    "train",
+    "tvmonitor",
+]
+
+
+@st.experimental_singleton
+def generate_label_colors():
+    return np.random.uniform( 0, 255, size=(len( CLASSES ), 3) )
+
+
+COLORS = generate_label_colors()
 
 # This code is based on https://github.com/streamlit/demo-self-driving/blob/230245391f2dda0cb464008195a470751c01770b/streamlit_app.py#L48  # noqa: E501
 def download_file(url, download_to: Path, expected_size=None):
@@ -73,17 +106,12 @@ def download_file(url, download_to: Path, expected_size=None):
         if progress_bar is not None:
             progress_bar.empty()
 
-
-RTC_CONFIGURATION = RTCConfiguration(
-    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
-)
-
-
 def main():
     st.header("WebRTC demo")
 
     pages = {
-        "Real time object detection (sendrecv)": app_object_detection,
+        "Real time object detection (sendrecv)": live_object_detection,
+        "Upload Video for detection": video_object_detection,
     }
     page_titles = pages.keys()
 
@@ -106,210 +134,54 @@ def app_loopback():
     """Simple video loopback"""
     webrtc_streamer(key="loopback")
 
+def video_object_detection():
+    image = st.file_uploader('Choose a video', type=['avi', 'mp4', 'mov'])
+    if st.button( 'Detect' ):
+        if image is not None:
+            file = {"file": image.getvalue()}
+            try:
+                with aiofiles.tempfile.NamedTemporaryFile( mode="wb", delete=False ) as temp:
+                    try:
+                        contents = file.read()
+                        temp.write( contents )
+                    except Exception as e:
+                        return {"message": "There was an error uploading the file\n" + str( e )}
+                    finally:
+                        file.close()
 
+                #video_path, width, height = run_in_threadpool( inference.inference_video, detector,
+                #                                                     temp.name )  # Pass temp.name to VideoCapture()
+            except Exception as e:
+                return {"message": "There was an error processing the file\n" + str( e )}
+            finally:
+                os.remove( temp.name )
 
-def app_object_detection():
-    """Object detection demo with MobileNet SSD.
-    This model and code are based on
-    https://github.com/robmarkcole/object-detection-app
-    """
-    MODEL_URL = "https://github.com/robmarkcole/object-detection-app/raw/master/model/MobileNetSSD_deploy.caffemodel"  # noqa: E501
-    MODEL_LOCAL_PATH = HERE / "./models/MobileNetSSD_deploy.caffemodel"
-    PROTOTXT_URL = "https://github.com/robmarkcole/object-detection-app/raw/master/model/MobileNetSSD_deploy.prototxt.txt"  # noqa: E501
-    PROTOTXT_LOCAL_PATH = HERE / "./models/MobileNetSSD_deploy.prototxt.txt"
-
-    CLASSES = [
-        "background",
-        "aeroplane",
-        "bicycle",
-        "bird",
-        "boat",
-        "bottle",
-        "bus",
-        "car",
-        "cat",
-        "chair",
-        "cow",
-        "diningtable",
-        "dog",
-        "horse",
-        "motorbike",
-        "person",
-        "pottedplant",
-        "sheep",
-        "sofa",
-        "train",
-        "tvmonitor",
-    ]
-
-    @st.experimental_singleton
-    def generate_label_colors():
-        return np.random.uniform(0, 255, size=(len(CLASSES), 3))
-
-    COLORS = generate_label_colors()
-
-    download_file(MODEL_URL, MODEL_LOCAL_PATH, expected_size=23147564)
-    download_file(PROTOTXT_URL, PROTOTXT_LOCAL_PATH, expected_size=29353)
-
+def live_object_detection():
     DEFAULT_CONFIDENCE_THRESHOLD = 0.5
 
-    class Detection(NamedTuple):
-        name: str
-        prob: float
-
-    # Session-specific caching
-    cache_key = "object_detection_dnn"
-    if cache_key in st.session_state:
-        net = st.session_state[cache_key]
-    else:
-        net = cv2.dnn.readNetFromCaffe(str(PROTOTXT_LOCAL_PATH), str(MODEL_LOCAL_PATH))
-        st.session_state[cache_key] = net
-
     confidence_threshold = st.slider(
-        "Confidence threshold", 0.0, 1.0, DEFAULT_CONFIDENCE_THRESHOLD, 0.05
+        "Confidence threshold", 0.0, 1.0, DEFAULT_CONFIDENCE_THRESHOLD, 0.05, key = 'confidence_threshold'
     )
 
-    # .... Initialize SORT ....
-    # .........................
-    sort_max_age = 5
-    sort_min_hits = 2
-    sort_iou_thresh = 0.2
-    sort_tracker = Sort( max_age=sort_max_age,
-                         min_hits=sort_min_hits,
-                         iou_threshold=sort_iou_thresh )
-
-    rand_color_list = []
-    for i in range( 0, 5005 ):
-        r = randint( 0, 255 )
-        g = randint( 0, 255 )
-        b = randint( 0, 255 )
-        rand_color = (r, g, b)
-        rand_color_list.append( rand_color )
-
-    def _annotate_image(image, detections):
-        # loop over the detections
-        (h, w) = image.shape[:2]
-        result: List[Detection] = []
-        track_result = []
-        txt_str = ""
-        for i in np.arange(0, detections.shape[2]):
-            confidence = detections[0, 0, i, 2]
-
-            if confidence > confidence_threshold:
-                # extract the index of the class label from the `detections`,
-                # then compute the (x, y)-coordinates of the bounding box for
-                # the object
-                idx = int(detections[0, 0, i, 1])
-                box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
-                (startX, startY, endX, endY) = box.astype("int")
-
-                name = CLASSES[idx]
-                result.append(Detection(name=name, prob=float(confidence)))
-
-                """# display the prediction
-                label = f"{name}: {round(confidence * 100, 2)}%"
-                cv2.rectangle(image, (startX, startY), (endX, endY), COLORS[idx], 2)
-                y = startY - 15 if startY - 15 > 15 else startY + 15
-                cv2.putText(
-                    image,
-                    label,
-                    (startX, y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    COLORS[idx],
-                    2,
-                )"""
-
-                try:
-                   dets_to_sort
-                except UnboundLocalError:
-                   dets_to_sort = np.empty( (0, 6) )
-                # NOTE: We send in detected object class too
-                dets_to_sort = np.vstack( (dets_to_sort,
-                                           np.array( [startX, startY, endX, endY, confidence, idx] )) )
-
-                # Run SORT
-                tracked_dets = sort_tracker.update( dets_to_sort )
-                tracks = sort_tracker.getTrackers()
-
-                # loop over tracks
-                for track in tracks:
-                    # color = compute_color_for_labels(id)
-                    # draw colored tracks
-                    [cv2.line( image, (int( track.centroidarr[i][0] ),
-                                     int( track.centroidarr[i][1] )),
-                               (int( track.centroidarr[i + 1][0] ),
-                                int( track.centroidarr[i + 1][1] )),
-                               rand_color_list[track.id], thickness=2 )
-                     for i, _ in enumerate( track.centroidarr )
-                     if i < len( track.centroidarr ) - 1]
-
-                    # draw boxes for visualization
-                if len( tracked_dets ) > 0:
-                    bbox_xyxy = tracked_dets[:, :4]
-                    identities = tracked_dets[:, 8]
-                    categories = tracked_dets[:, 4]
-
-                    for i, box in enumerate( bbox_xyxy ):
-                        x1, y1, x2, y2 = [int( i ) for i in box]
-                        cat = int( categories[i] ) if categories is not None else 0
-                        id = int( identities[i] ) if identities is not None else 0
-                        data = (int( (box[0] + box[2]) / 2 ), (int( (box[1] + box[3]) / 2 )))
-                        label = str( id ) + ":" + CLASSES[cat] + "-" + str(confidence)
-                        (w, h), _ = cv2.getTextSize( label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1 )
-                        cv2.rectangle( image, (x1, y1), (x2, y2), rand_color_list[track.id], 2 )
-                        #cv2.rectangle( image, (x1, y1 - 20), (x1 + w, y1), (255, 144, 30), -1 )
-                        cv2.putText( image, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX,
-                                     0.6, rand_color_list[track.id], 1 )
-                        # cv2.circle(img, data, 6, color,-1)   #centroid of box
-
-                        txt_str += "%i %i %f %f %f %f %f %f" % (
-                            id, cat, int( box[0] ) / image.shape[1], int( box[1] ) / image.shape[0],
-                            int( box[2] ) / image.shape[1],
-                            int( box[3] ) / image.shape[0], int( box[0] + (box[2] * 0.5) ) / image.shape[1],
-                            int( box[1] + (
-                                    box[3] * 0.5) ) / image.shape[0])
-                        txt_str += "\n"
-                        track_result.append(txt_str)
-
-
-
-
-        return image, result, txt_str
-
-    result_queue = (
-        queue.Queue()
-    )  # TODO: A general-purpose shared state object may be more useful.
-    track_queue = (
-        queue.Queue()
+    RTC_CONFIGURATION = RTCConfiguration(
+        {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
     )
 
-    def callback(frame: av.VideoFrame) -> av.VideoFrame:
-        image = frame.to_ndarray(format="bgr24")
-        blob = cv2.dnn.blobFromImage(
-            cv2.resize(image, (300, 300)), 0.007843, (300, 300), 127.5
-        )
-        net.setInput(blob)
-        detections = net.forward()
-        annotated_image, result, track_str = _annotate_image(image, detections)
+    model_init()
 
-        # NOTE: This `recv` method is called in another thread,
-        # so it must be thread-safe.
-        result_queue.put(result)  # TODO:
-        track_queue.put(track_str)
-
-        return av.VideoFrame.from_ndarray(annotated_image, format="bgr24")
+    if 'sort_tracker' not in st.session_state:
+        st.session_state['sort_tracker'] = app_object_track()
 
     webrtc_ctx = webrtc_streamer(
         key="object-detection",
         mode=WebRtcMode.SENDRECV,
         rtc_configuration=RTC_CONFIGURATION,
-        video_frame_callback=callback,
+        video_frame_callback=frame_callback,
         media_stream_constraints={"video": True, "audio": False},
         async_processing=True,
     )
 
-    if st.checkbox("Show the detected labels", value=True):
+    if st.checkbox( "Show the detected labels", value=True ):
         if webrtc_ctx.state.playing:
             labels_placeholder = st.empty()
             track_placeholder = st.empty()
@@ -320,19 +192,178 @@ def app_object_detection():
             # are not strictly synchronized.
             while True:
                 try:
-                    result = result_queue.get(timeout=1.0)
-                    track_list = track_queue.get(timeout=1.0)
+                    result = result_queue.get( timeout=1.0 )
+                    track_list = track_queue.get( timeout=1.0 )
                 except queue.Empty:
                     result = None
-                    track_list=None
-                labels_placeholder.table(result)
-                track_placeholder.table(track_list.split())
+                    track_list = None
+                labels_placeholder.table( result )
+                track_placeholder.table( track_list.split() )
 
     st.markdown(
         "This demo uses a model and code from "
         "https://github.com/robmarkcole/object-detection-app. "
         "Many thanks to the project."
     )
+
+def model_init():
+    """Object detection demo with MobileNet SSD.
+    This model and code are based on
+    https://github.com/robmarkcole/object-detection-app
+    """
+    MODEL_URL = "https://github.com/robmarkcole/object-detection-app/raw/master/model/MobileNetSSD_deploy.caffemodel"  # noqa: E501
+    MODEL_LOCAL_PATH = HERE / "./models/MobileNetSSD_deploy.caffemodel"
+    PROTOTXT_URL = "https://github.com/robmarkcole/object-detection-app/raw/master/model/MobileNetSSD_deploy.prototxt.txt"  # noqa: E501
+    PROTOTXT_LOCAL_PATH = HERE / "./models/MobileNetSSD_deploy.prototxt.txt"
+
+    download_file(MODEL_URL, MODEL_LOCAL_PATH, expected_size=23147564)
+    download_file(PROTOTXT_URL, PROTOTXT_LOCAL_PATH, expected_size=29353)
+
+    # Session-specific caching
+    cache_key = "object_detection_dnn"
+    if cache_key in st.session_state:
+        net = st.session_state[cache_key]
+    else:
+        net = cv2.dnn.readNetFromCaffe(str(PROTOTXT_LOCAL_PATH), str(MODEL_LOCAL_PATH))
+        st.session_state[cache_key] = net
+
+    return net
+
+def app_object_track():
+    # .... Initialize SORT ....
+    # .........................
+    sort_max_age = 5
+    sort_min_hits = 2
+    sort_iou_thresh = 0.2
+    sort_tracker = Sort( max_age=sort_max_age,
+                         min_hits=sort_min_hits,
+                         iou_threshold=sort_iou_thresh )
+
+    return sort_tracker
+
+class Detection(NamedTuple):
+    name: str
+    prob: float
+
+def annotate_image(image, detections):
+
+    # loop over the detections
+    (h, w) = image.shape[:2]
+    result: List[Detection] = []
+    track_result = []
+    txt_str = ""
+    confidence_threshold = st.session_state.confidence_threshold
+    for i in np.arange(0, detections.shape[2]):
+        confidence = detections[0, 0, i, 2]
+
+        if confidence > confidence_threshold:
+            # extract the index of the class label from the `detections`,
+            # then compute the (x, y)-coordinates of the bounding box for
+            # the object
+            idx = int(detections[0, 0, i, 1])
+            box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
+            (startX, startY, endX, endY) = box.astype("int")
+
+            name = CLASSES[idx]
+            result.append(Detection(name=name, prob=float(confidence)))
+
+            """# display the prediction
+            label = f"{name}: {round(confidence * 100, 2)}%"
+            cv2.rectangle(image, (startX, startY), (endX, endY), COLORS[idx], 2)
+            y = startY - 15 if startY - 15 > 15 else startY + 15
+            cv2.putText(
+                image,
+                label,
+                (startX, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                COLORS[idx],
+                2,
+            )"""
+
+            try:
+               dets_to_sort
+            except UnboundLocalError:
+               dets_to_sort = np.empty( (0, 6) )
+            # NOTE: We send in detected object class too
+            dets_to_sort = np.vstack( (dets_to_sort,
+                                       np.array( [startX, startY, endX, endY, confidence, idx] )) )
+
+            # Run SORT
+            sort_tracker=st.session_state['sort_tracker']
+            tracked_dets = sort_tracker.update( dets_to_sort )
+            tracks = sort_tracker.getTrackers()
+
+            # loop over tracks
+            for track in tracks:
+                # color = compute_color_for_labels(id)
+                # draw colored tracks
+                [cv2.line( image, (int( track.centroidarr[i][0] ),
+                                 int( track.centroidarr[i][1] )),
+                           (int( track.centroidarr[i + 1][0] ),
+                            int( track.centroidarr[i + 1][1] )),
+                           COLORS[track.id], thickness=2 )
+                 for i, _ in enumerate( track.centroidarr )
+                 if i < len( track.centroidarr ) - 1]
+
+                # draw boxes for visualization
+            if len( tracked_dets ) > 0:
+                bbox_xyxy = tracked_dets[:, :4]
+                identities = tracked_dets[:, 8]
+                categories = tracked_dets[:, 4]
+
+                for i, box in enumerate( bbox_xyxy ):
+                    x1, y1, x2, y2 = [int( i ) for i in box]
+                    cat = int( categories[i] ) if categories is not None else 0
+                    id = int( identities[i] ) if identities is not None else 0
+                    data = (int( (box[0] + box[2]) / 2 ), (int( (box[1] + box[3]) / 2 )))
+                    label = str( id ) + ":" + CLASSES[cat] + "-" + str(confidence)
+                    (w, h), _ = cv2.getTextSize( label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1 )
+                    cv2.rectangle( image, (x1, y1), (x2, y2), COLORS[track.id], 2 )
+                    #cv2.rectangle( image, (x1, y1 - 20), (x1 + w, y1), (255, 144, 30), -1 )
+                    cv2.putText( image, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX,
+                                 0.6, COLORS[track.id], 1 )
+                    # cv2.circle(img, data, 6, color,-1)   #centroid of box
+
+                    txt_str += "%i %i %f %f %f %f %f %f" % (
+                        id, cat, int( box[0] ) / image.shape[1], int( box[1] ) / image.shape[0],
+                        int( box[2] ) / image.shape[1],
+                        int( box[3] ) / image.shape[0], int( box[0] + (box[2] * 0.5) ) / image.shape[1],
+                        int( box[1] + (
+                                box[3] * 0.5) ) / image.shape[0])
+                    txt_str += "\n"
+                    track_result.append(txt_str)
+
+
+
+
+    return image, result, txt_str
+
+result_queue = (
+    queue.Queue()
+)  # TODO: A general-purpose shared state object may be more useful.
+track_queue = (
+    queue.Queue()
+)
+
+def frame_callback(frame: av.VideoFrame, ) -> av.VideoFrame:
+    image = frame.to_ndarray(format="bgr24")
+    blob = cv2.dnn.blobFromImage(
+        cv2.resize(image, (300, 300)), 0.007843, (300, 300), 127.5
+    )
+    net = st.session_state["object_detection_dnn"]
+    net.setInput(blob)
+    detections = net.forward()
+    annotated_image, result, track_str = annotate_image( image, detections )
+
+    # NOTE: This `recv` method is called in another thread,
+    # so it must be thread-safe.
+    result_queue.put(result)  # TODO:
+    track_queue.put(track_str)
+
+    return av.VideoFrame.from_ndarray(annotated_image, format="bgr24")
+
+
 
 
 
