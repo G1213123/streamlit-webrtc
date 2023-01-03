@@ -6,8 +6,9 @@ import urllib.request
 from pathlib import Path
 from typing import List, NamedTuple, Optional
 from sort import Sort
-import aiofiles
-
+import tempfile
+import uuid
+import asyncio
 
 import av
 import cv2
@@ -25,6 +26,8 @@ from streamlit_webrtc import (
 HERE = Path(__file__).parent
 
 logger = logging.getLogger(__name__)
+
+FFMPEG_PATH = r"C:\software\ffmpeg\bin\ffmpeg"
 
 CLASSES = [
     "background",
@@ -53,11 +56,11 @@ CLASSES = [
 
 @st.experimental_singleton
 def generate_label_colors():
-    return np.random.uniform( 0, 255, size=(len( CLASSES ), 3) )
+    return np.random.uniform( 0, 255, size=(255, 3) )
 
 
 COLORS = generate_label_colors()
-
+DEFAULT_CONFIDENCE_THRESHOLD =0.5
 # This code is based on https://github.com/streamlit/demo-self-driving/blob/230245391f2dda0cb464008195a470751c01770b/streamlit_app.py#L48  # noqa: E501
 def download_file(url, download_to: Path, expected_size=None):
     # Don't download the file twice.
@@ -103,7 +106,7 @@ def download_file(url, download_to: Path, expected_size=None):
         if progress_bar is not None:
             progress_bar.empty()
 
-def main():
+async def main():
     st.header("WebRTC demo")
 
     pages = {
@@ -119,7 +122,7 @@ def main():
     st.subheader(page_title)
 
     page_func = pages[page_title]
-    page_func()
+    await page_func()
 
     logger.debug("=== Alive threads ===")
     for thread in threading.enumerate():
@@ -131,43 +134,109 @@ def app_loopback():
     """Simple video loopback"""
     webrtc_streamer(key="loopback")
 
-def video_object_detection():
-    image = st.file_uploader('Choose a video', type=['avi', 'mp4', 'mov'])
+async def video_object_detection():
+    confidence_threshold = st.slider(
+        "Confidence threshold", 0.0, 1.0, DEFAULT_CONFIDENCE_THRESHOLD, 0.05, key='confidence_threshold'
+    )
+    file = st.file_uploader('Choose a video', type=['avi', 'mp4', 'mov'])
     if st.button( 'Detect' ):
-        if image is not None:
-            file = {"file": image.getvalue()}
+        if file is not None:
             try:
-                with aiofiles.tempfile.NamedTemporaryFile( mode="wb", delete=False ) as temp:
-                    try:
-                        contents = file.read()
-                        temp.write( contents )
-                    except Exception as e:
-                        return {"message": "There was an error uploading the file\n" + str( e )}
-                    finally:
-                        file.close()
+                tfile = tempfile.NamedTemporaryFile( delete=False )
+                tfile.write( file.read() )
+                tfile.close()
 
-                #video_path, width, height = run_in_threadpool( inference.inference_video, detector,
-                #                                                     temp.name )  # Pass temp.name to VideoCapture()
+                cap = cv2.VideoCapture(tfile.name)
+                width, height = int( cap.get( cv2.CAP_PROP_FRAME_WIDTH ) ), int( cap.get( cv2.CAP_PROP_FRAME_HEIGHT ) )
+                fps = cap.get( cv2.CAP_PROP_FPS )
+
+                if not os.path.exists( os.path.join( HERE,'storage') ):
+                    os.makedirs(os.path.join( HERE,'storage') )
+                output_path = os.path.join( HERE, f"storage\\{str( uuid.uuid4() )}.mp4" )
+                fourcc = cv2.VideoWriter_fourcc( *'mp4v' )
+                out = cv2.VideoWriter( output_path, fourcc, fps, (width, height) )
+                net =  model_init()
+                sort_tracker = app_object_track()
+                while cap.isOpened():
+                    try:
+                        ret, frame = cap.read()
+                        if not ret:
+                            break
+                    except Exception as e:
+                        print( e )
+                        continue
+
+                    blob = cv2.dnn.blobFromImage(
+                        cv2.resize( frame, (300, 300) ), 0.007843, (300, 300), 127.5
+                    )
+                    net.setInput( blob )
+                    detections = net.forward()
+                    # Update object localizer
+                    annotated_image, result, track_str = annotate_image( frame, detections, confidence_threshold,sort_tracker )
+                    out.write( annotated_image )
+                    result_queue.put( result )
+                    track_queue.put( track_str )
+
+                cap.release()
+                out.release()
+
+                output_path_h264 = output_path.replace( '.mp4', '_h264.mp4' )
+
+                # Encode video streams into the H.264
+                os.system( '{} -i {} -vcodec libx264 {}'.format( FFMPEG_PATH, output_path, output_path_h264 ) )
+                os.remove( output_path )
+
+                tfile.close()
+                st.video( output_path_h264 )
+
             except Exception as e:
                 return {"message": "There was an error processing the file\n" + str( e )}
-            finally:
-                os.remove( temp.name )
 
-def live_object_detection():
-    DEFAULT_CONFIDENCE_THRESHOLD = 0.5
+    if st.checkbox( "Show the detected labels", value=True ):
+        labels_placeholder = st.empty()
+        track_placeholder = st.empty()
 
+        while True:
+            try:
+                result = result_queue.get( timeout=1.0 )
+                track_list = track_queue.get( timeout=1.0 )
+            except queue.Empty:
+                result = None
+                track_list = None
+            labels_placeholder.table( result )
+            track_placeholder.table( None if track_list is None else track_list.split() )
+
+
+async def live_object_detection():
     confidence_threshold = st.slider(
         "Confidence threshold", 0.0, 1.0, DEFAULT_CONFIDENCE_THRESHOLD, 0.05, key = 'confidence_threshold'
     )
 
+    #public-stun-list.txt
+    #https://gist.github.com/mondain/b0ec1cf5f60ae726202e
     RTC_CONFIGURATION = RTCConfiguration(
-        {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+        {"iceServers": [{"urls": ["stun:stun.ucsb.edu:3478"]}]}
     )
 
-    model_init()
+    net = model_init()
+    sort_tracker = app_object_track()
 
-    if 'sort_tracker' not in st.session_state:
-        st.session_state['sort_tracker'] = app_object_track()
+    def frame_callback(frame: av.VideoFrame, ) -> av.VideoFrame:
+        image = frame.to_ndarray( format="bgr24" )
+        blob = cv2.dnn.blobFromImage(
+            cv2.resize( image, (300, 300) ), 0.007843, (300, 300), 127.5
+        )
+        net.setInput( blob )
+        detections = net.forward()
+        annotated_image, result, track_str = annotate_image( image, detections,  confidence_threshold, sort_tracker )
+
+        # NOTE: This `recv` method is called in another thread,
+        # so it must be thread-safe.
+        result_queue.put( result )
+        track_queue.put( track_str )
+
+        return av.VideoFrame.from_ndarray( annotated_image, format="bgr24" )
+
 
     webrtc_ctx = webrtc_streamer(
         key="object-detection",
@@ -203,6 +272,7 @@ def live_object_detection():
         "Many thanks to the project."
     )
 
+
 def model_init():
     """Object detection demo with MobileNet SSD.
     This model and code are based on
@@ -223,7 +293,7 @@ def model_init():
     else:
         net = cv2.dnn.readNetFromCaffe(str(PROTOTXT_LOCAL_PATH), str(MODEL_LOCAL_PATH))
         st.session_state[cache_key] = net
-
+    print(st.session_state[cache_key])
     return net
 
 def app_object_track():
@@ -242,14 +312,14 @@ class Detection(NamedTuple):
     name: str
     prob: float
 
-def annotate_image(image, detections):
+def annotate_image(image, detections, confidence_threshold, sort_tracker = None ):
 
     # loop over the detections
     (h, w) = image.shape[:2]
     result: List[Detection] = []
     track_result = []
     txt_str = ""
-    confidence_threshold = st.session_state.confidence_threshold
+
     for i in np.arange(0, detections.shape[2]):
         confidence = detections[0, 0, i, 2]
 
@@ -264,20 +334,6 @@ def annotate_image(image, detections):
             name = CLASSES[idx]
             result.append(Detection(name=name, prob=float(confidence)))
 
-            """# display the prediction
-            label = f"{name}: {round(confidence * 100, 2)}%"
-            cv2.rectangle(image, (startX, startY), (endX, endY), COLORS[idx], 2)
-            y = startY - 15 if startY - 15 > 15 else startY + 15
-            cv2.putText(
-                image,
-                label,
-                (startX, y),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                COLORS[idx],
-                2,
-            )"""
-
             try:
                dets_to_sort
             except UnboundLocalError:
@@ -287,9 +343,9 @@ def annotate_image(image, detections):
                                        np.array( [startX, startY, endX, endY, confidence, idx] )) )
 
             # Run SORT
-            sort_tracker=st.session_state['sort_tracker']
-            tracked_dets = sort_tracker.update( dets_to_sort )
-            tracks = sort_tracker.getTrackers()
+            if sort_tracker is not None:
+                tracked_dets = sort_tracker.update( dets_to_sort )
+                tracks = sort_tracker.getTrackers()
 
             # loop over tracks
             for track in tracks:
@@ -343,25 +399,6 @@ track_queue = (
     queue.Queue()
 )
 
-def frame_callback(frame: av.VideoFrame, ) -> av.VideoFrame:
-    image = frame.to_ndarray(format="bgr24")
-    blob = cv2.dnn.blobFromImage(
-        cv2.resize(image, (300, 300)), 0.007843, (300, 300), 127.5
-    )
-    net = st.session_state["object_detection_dnn"]
-    net.setInput(blob)
-    detections = net.forward()
-    annotated_image, result, track_str = annotate_image( image, detections )
-
-    # NOTE: This `recv` method is called in another thread,
-    # so it must be thread-safe.
-    result_queue.put(result)  # TODO:
-    track_queue.put(track_str)
-
-    return av.VideoFrame.from_ndarray(annotated_image, format="bgr24")
-
-
-
 
 
 if __name__ == "__main__":
@@ -383,4 +420,5 @@ if __name__ == "__main__":
     fsevents_logger = logging.getLogger("fsevents")
     fsevents_logger.setLevel(logging.WARNING)
 
-    main()
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete( main() )
