@@ -5,6 +5,9 @@ import threading
 import urllib.request
 from pathlib import Path
 from typing import List, NamedTuple, Optional
+
+import pandas as pd
+
 from sort import Sort
 import tempfile
 import uuid
@@ -138,73 +141,78 @@ async def video_object_detection():
     confidence_threshold = st.slider(
         "Confidence threshold", 0.0, 1.0, DEFAULT_CONFIDENCE_THRESHOLD, 0.05, key='confidence_threshold'
     )
+    track_list = []
+    result_list = []
     file = st.file_uploader('Choose a video', type=['avi', 'mp4', 'mov'])
     if st.button( 'Detect' ):
         if file is not None:
+            progress_bar = st.progress(0)
+            progress=0
+
+            tfile = tempfile.NamedTemporaryFile( delete=False )
+            tfile.write( file.read() )
+            tfile.close()
+
+            cap = cv2.VideoCapture(tfile.name)
+            width, height = int( cap.get( cv2.CAP_PROP_FRAME_WIDTH ) ), int( cap.get( cv2.CAP_PROP_FRAME_HEIGHT ) )
+            fps = cap.get( cv2.CAP_PROP_FPS )
+
+            if not os.path.exists( os.path.join( HERE,'storage') ):
+                os.makedirs(os.path.join( HERE,'storage') )
+            output_path = os.path.join( HERE, f"storage\\{str( uuid.uuid4() )}.mp4" )
+            fourcc = cv2.VideoWriter_fourcc( *'mp4v' )
+            out = cv2.VideoWriter( output_path, fourcc, fps, (width, height) )
+            net =  model_init()
+            sort_tracker = app_object_track()
+            while cap.isOpened():
+                try:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                except Exception as e:
+                    print( e )
+                    continue
+
+                blob = cv2.dnn.blobFromImage(
+                    cv2.resize( frame, (300, 300) ), 0.007843, (300, 300), 127.5
+                )
+                net.setInput( blob )
+                detections = net.forward()
+                # Update object localizer
+                image, result,track_str = annotate_image( frame, detections, confidence_threshold,sort_tracker,progress )
+                out.write( image )
+                result_list.append( result )
+                track_list.append( track_str )
+
+                #progress of analysis
+                progress +=1
+                progress_bar.progress(progress/int(cap.get(cv2.CAP_PROP_FRAME_COUNT))*0.8)
+
+            cap.release()
+            out.release()
+
+            output_path_h264 = output_path.replace( '.mp4', '_h264.mp4' )
+
+            # Encode video streams into the H.264
+            os.system( '{} -i {} -vcodec libx264 {}'.format( FFMPEG_PATH, output_path, output_path_h264 ) )
+            tfile.close()
+            st.video( output_path_h264 )
+            os.remove( output_path )
+            progress_bar.progress(100)
+
+
+                # labels_placeholder = st.empty()
             try:
-                tfile = tempfile.NamedTemporaryFile( delete=False )
-                tfile.write( file.read() )
-                tfile.close()
-
-                cap = cv2.VideoCapture(tfile.name)
-                width, height = int( cap.get( cv2.CAP_PROP_FRAME_WIDTH ) ), int( cap.get( cv2.CAP_PROP_FRAME_HEIGHT ) )
-                fps = cap.get( cv2.CAP_PROP_FPS )
-
-                if not os.path.exists( os.path.join( HERE,'storage') ):
-                    os.makedirs(os.path.join( HERE,'storage') )
-                output_path = os.path.join( HERE, f"storage\\{str( uuid.uuid4() )}.mp4" )
-                fourcc = cv2.VideoWriter_fourcc( *'mp4v' )
-                out = cv2.VideoWriter( output_path, fourcc, fps, (width, height) )
-                net =  model_init()
-                sort_tracker = app_object_track()
-                while cap.isOpened():
-                    try:
-                        ret, frame = cap.read()
-                        if not ret:
-                            break
-                    except Exception as e:
-                        print( e )
-                        continue
-
-                    blob = cv2.dnn.blobFromImage(
-                        cv2.resize( frame, (300, 300) ), 0.007843, (300, 300), 127.5
-                    )
-                    net.setInput( blob )
-                    detections = net.forward()
-                    # Update object localizer
-                    annotated_image, result, track_str = annotate_image( frame, detections, confidence_threshold,sort_tracker )
-                    out.write( annotated_image )
-                    result_queue.put( result )
-                    track_queue.put( track_str )
-
-                cap.release()
-                out.release()
-
-                output_path_h264 = output_path.replace( '.mp4', '_h264.mp4' )
-
-                # Encode video streams into the H.264
-                os.system( '{} -i {} -vcodec libx264 {}'.format( FFMPEG_PATH, output_path, output_path_h264 ) )
-                os.remove( output_path )
-
-                tfile.close()
-                st.video( output_path_h264 )
-
-            except Exception as e:
-                return {"message": "There was an error processing the file\n" + str( e )}
-
-    if st.checkbox( "Show the detected labels", value=True ):
-        labels_placeholder = st.empty()
-        track_placeholder = st.empty()
-
-        while True:
-            try:
-                result = result_queue.get( timeout=1.0 )
-                track_list = track_queue.get( timeout=1.0 )
-            except queue.Empty:
-                result = None
-                track_list = None
-            labels_placeholder.table( result )
-            track_placeholder.table( None if track_list is None else track_list.split() )
+                track_list= [item.strip() for sublist in [element.split( "\n" ) for element in track_list] for item in sublist]
+                track_list = [e.split() for e in track_list if e != '']
+                track_table = pd.DataFrame( track_list,
+                                            columns=['frame', 'id', 'class', 'xmin', 'ymin', 'xmax', 'ymax', 'xmid',
+                                                     'ymid'] )
+                # track_table.insert(loc=2, column='type', value=track_table['class'].apply(lambda x:CLASSES[x]))
+                # labels_placeholder.table( result_list )
+                st.table( track_table )
+            except:
+                'No tracking data found'
 
 
 async def live_object_detection():
@@ -301,7 +309,7 @@ def app_object_track():
     # .........................
     sort_max_age = 5
     sort_min_hits = 2
-    sort_iou_thresh = 0.2
+    sort_iou_thresh = DEFAULT_CONFIDENCE_THRESHOLD
     sort_tracker = Sort( max_age=sort_max_age,
                          min_hits=sort_min_hits,
                          iou_threshold=sort_iou_thresh )
@@ -312,13 +320,17 @@ class Detection(NamedTuple):
     name: str
     prob: float
 
-def annotate_image(image, detections, confidence_threshold, sort_tracker = None ):
+def annotate_image(image, detections, confidence_threshold, sort_tracker = None, frame = None ):
 
     # loop over the detections
     (h, w) = image.shape[:2]
     result: List[Detection] = []
     track_result = []
     txt_str = ""
+
+    if frame:
+        cv2.putText( image, f'frame:{frame}', (40,40), cv2.FONT_HERSHEY_SIMPLEX,
+                     1, (240,240,240), 2 )
 
     for i in np.arange(0, detections.shape[2]):
         confidence = detections[0, 0, i, 2]
@@ -335,7 +347,7 @@ def annotate_image(image, detections, confidence_threshold, sort_tracker = None 
             result.append(Detection(name=name, prob=float(confidence)))
 
             try:
-               dets_to_sort
+               _ = dets_to_sort
             except UnboundLocalError:
                dets_to_sort = np.empty( (0, 6) )
             # NOTE: We send in detected object class too
@@ -351,7 +363,7 @@ def annotate_image(image, detections, confidence_threshold, sort_tracker = None 
             for track in tracks:
                 # color = compute_color_for_labels(id)
                 # draw colored tracks
-                [cv2.line( image, (int( track.centroidarr[i][0] ),
+                drawn_track = [cv2.line( image, (int( track.centroidarr[i][0] ),
                                  int( track.centroidarr[i][1] )),
                            (int( track.centroidarr[i + 1][0] ),
                             int( track.centroidarr[i + 1][1] )),
@@ -371,19 +383,19 @@ def annotate_image(image, detections, confidence_threshold, sort_tracker = None 
                     id = int( identities[i] ) if identities is not None else 0
                     data = (int( (box[0] + box[2]) / 2 ), (int( (box[1] + box[3]) / 2 )))
                     label = str( id ) + ":" + CLASSES[cat] + "-" + str(confidence)
-                    (w, h), _ = cv2.getTextSize( label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1 )
+                    (w, h), _ = cv2.getTextSize( label, cv2.FONT_HERSHEY_SIMPLEX, 1, 2 )
                     cv2.rectangle( image, (x1, y1), (x2, y2), COLORS[track.id], 2 )
-                    #cv2.rectangle( image, (x1, y1 - 20), (x1 + w, y1), (255, 144, 30), -1 )
+                    #cv2.rectangle( image, (x1, y1 - 20), (x1 + w, y1), COLORS[track.id], -1 )
                     cv2.putText( image, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX,
-                                 0.6, COLORS[track.id], 1 )
+                                 1, COLORS[track.id], 2 )
                     # cv2.circle(img, data, 6, color,-1)   #centroid of box
 
-                    txt_str += "%i %i %f %f %f %f %f %f" % (
-                        id, cat, int( box[0] ) / image.shape[1], int( box[1] ) / image.shape[0],
-                        int( box[2] ) / image.shape[1],
-                        int( box[3] ) / image.shape[0], int( box[0] + (box[2] * 0.5) ) / image.shape[1],
+                    txt_str += "%s%i %i %f %f %f %f %f %f" % (str(frame) + ' ' if frame is not None else '',
+                        id, cat, int( box[0] ) , int( box[1] ) ,
+                        int( box[2] ) ,
+                        int( box[3] ) , int( box[0] + (box[2] * 0.5) ) ,
                         int( box[1] + (
-                                box[3] * 0.5) ) / image.shape[0])
+                                box[3] * 0.5) ) )
                     txt_str += "\n"
                     track_result.append(txt_str)
 
