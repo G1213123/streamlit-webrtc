@@ -1,10 +1,15 @@
+import YOLOv7.utils
+import config
+import inference
 
 import logging
 import queue
 import threading
 import urllib.request
 from pathlib import Path
-from typing import List, NamedTuple, Optional
+from typing import List, NamedTuple
+import requests
+import tarfile
 
 import pandas as pd
 
@@ -22,48 +27,33 @@ import streamlit as st
 from streamlit_webrtc import (
     RTCConfiguration,
     WebRtcMode,
-    WebRtcStreamerContext,
     webrtc_streamer,
 )
 
-HERE = Path(__file__).parent
-
 logger = logging.getLogger(__name__)
 
-FFMPEG_PATH = r"C:\software\ffmpeg\bin\ffmpeg"
-
-CLASSES = [
-    "background",
-    "aeroplane",
-    "bicycle",
-    "bird",
-    "boat",
-    "bottle",
-    "bus",
-    "car",
-    "cat",
-    "chair",
-    "cow",
-    "diningtable",
-    "dog",
-    "horse",
-    "motorbike",
-    "person",
-    "pottedplant",
-    "sheep",
-    "sofa",
-    "train",
-    "tvmonitor",
-]
+CLASSES = YOLOv7.utils.class_names
 
 
 @st.experimental_singleton
 def generate_label_colors():
-    return np.random.uniform( 0, 255, size=(255, 3) )
+    return np.random.uniform( 0, 255, size=(65536, 3) )
 
 
 COLORS = generate_label_colors()
 DEFAULT_CONFIDENCE_THRESHOLD =0.5
+
+#TODO:update model download function
+#url = "https://s3.ap-northeast-2.wasabisys.com/pinto-model-zoo/307_YOLOv7/no-postprocess/resources.tar.gz"
+#with open(local_filename, 'wb') as f:
+#    r = requests.get(url, stream=True)
+#    for chunk in r.raw.stream(1024, decode_content=False):
+#        if chunk:
+#            f.write(chunk)
+#            f.flush()
+##file = tarfile.open(fileobj=response.raw, mode="r|gz")
+#file.extractall(path=".")
+
 # This code is based on https://github.com/streamlit/demo-self-driving/blob/230245391f2dda0cb464008195a470751c01770b/streamlit_app.py#L48  # noqa: E501
 def download_file(url, download_to: Path, expected_size=None):
     # Don't download the file twice.
@@ -110,7 +100,7 @@ def download_file(url, download_to: Path, expected_size=None):
             progress_bar.empty()
 
 async def main():
-    st.header("WebRTC demo")
+    st.header("Object Tracking demo")
 
     pages = {
         "Real time object detection (sendrecv)": live_object_detection,
@@ -132,17 +122,36 @@ async def main():
         if thread.is_alive():
             logger.debug(f"  {thread.name} ({thread.ident})")
 
+def variables_container():
+    with st.container():
+        confidence_threshold = st.slider(
+            "Confidence threshold", 0.0, 1.0, DEFAULT_CONFIDENCE_THRESHOLD, 0.05, key='confidence_threshold'
+        )
+        st.caption( 'SORT Tracking Algorithm see: https://github.com/abewley/sort' )
+        track_age = st.slider(
+            "Tracking Age (frames)", 0, 20, 10, 1, key='track_age'
+        )
+        track_hits = st.slider(
+            "Tracking hits", 0, st.session_state.track_age, 6, 1, key='track_age'
+        )
+        iou_thres = st.slider(
+            "IOU threshold", 0.0, 1.0, 0.7, 0.1, key='iou_thres'
+        )
+    return confidence_threshold, track_age, track_hits, iou_thres
 
 def app_loopback():
     """Simple video loopback"""
     webrtc_streamer(key="loopback")
 
 async def video_object_detection():
-    confidence_threshold = st.slider(
-        "Confidence threshold", 0.0, 1.0, DEFAULT_CONFIDENCE_THRESHOLD, 0.05, key='confidence_threshold'
-    )
+    #usable video for detection
+    #https://www.pexels.com/video/aerial-footage-of-vehicular-traffic-of-a-busy-street-intersection-at-night-3048225/
+
+    confidence_threshold, track_age, track_hits, iou_thres = variables_container()
+
     track_list = []
     result_list = []
+    style = st.selectbox( 'Choose the model', [i for i in config.STYLES.keys()] )
     file = st.file_uploader('Choose a video', type=['avi', 'mp4', 'mov'])
     if st.button( 'Detect' ):
         if file is not None:
@@ -157,13 +166,13 @@ async def video_object_detection():
             width, height = int( cap.get( cv2.CAP_PROP_FRAME_WIDTH ) ), int( cap.get( cv2.CAP_PROP_FRAME_HEIGHT ) )
             fps = cap.get( cv2.CAP_PROP_FPS )
 
-            if not os.path.exists( os.path.join( HERE,'storage') ):
-                os.makedirs(os.path.join( HERE,'storage') )
-            output_path = os.path.join( HERE, f"storage\\{str( uuid.uuid4() )}.mp4" )
+            if not os.path.exists( os.path.join( config.HERE,'storage') ):
+                os.makedirs(os.path.join( config.HERE,'storage') )
+            output_path = os.path.join( config.HERE, f"storage\\{str( uuid.uuid4() )}.mp4" )
             fourcc = cv2.VideoWriter_fourcc( *'mp4v' )
             out = cv2.VideoWriter( output_path, fourcc, fps, (width, height) )
-            net =  model_init()
-            sort_tracker = app_object_track()
+            detector =  model_init(style, confidence_threshold)
+            sort_tracker = app_object_track(track_age, track_hits,iou_thres)
             while cap.isOpened():
                 try:
                     ret, frame = cap.read()
@@ -172,14 +181,9 @@ async def video_object_detection():
                 except Exception as e:
                     print( e )
                     continue
-
-                blob = cv2.dnn.blobFromImage(
-                    cv2.resize( frame, (300, 300) ), 0.007843, (300, 300), 127.5
-                )
-                net.setInput( blob )
-                detections = net.forward()
+                detections =  detector(frame)
                 # Update object localizer
-                image, result,track_str = annotate_image( frame, detections, confidence_threshold,sort_tracker,progress )
+                image, result,track_str = annotate_image( frame, detections,sort_tracker,progress )
                 out.write( image )
                 result_list.append( result )
                 track_list.append( track_str )
@@ -194,7 +198,7 @@ async def video_object_detection():
             output_path_h264 = output_path.replace( '.mp4', '_h264.mp4' )
 
             # Encode video streams into the H.264
-            os.system( '{} -i {} -vcodec libx264 {}'.format( FFMPEG_PATH, output_path, output_path_h264 ) )
+            os.system( '{} -i {} -vcodec libx264 {}'.format( config.FFMPEG_PATH, output_path, output_path_h264 ) )
             tfile.close()
             st.video( output_path_h264 )
             os.remove( output_path )
@@ -216,9 +220,7 @@ async def video_object_detection():
 
 
 async def live_object_detection():
-    confidence_threshold = st.slider(
-        "Confidence threshold", 0.0, 1.0, DEFAULT_CONFIDENCE_THRESHOLD, 0.05, key = 'confidence_threshold'
-    )
+    confidence_threshold, track_age, track_hits, iou_thres = variables_container()
 
     #public-stun-list.txt
     #https://gist.github.com/mondain/b0ec1cf5f60ae726202e
@@ -226,17 +228,18 @@ async def live_object_detection():
         {"iceServers": [{"urls": ["stun:stun.ucsb.edu:3478"]}]}
     )
 
-    net = model_init()
-    sort_tracker = app_object_track()
+    style = st.selectbox( 'Choose the model', [i for i in config.STYLES.keys()] )
+
+    detector = model_init(style, confidence_threshold)
+    sort_tracker = app_object_track(track_age, track_hits, iou_thres)
 
     def frame_callback(frame: av.VideoFrame, ) -> av.VideoFrame:
         image = frame.to_ndarray( format="bgr24" )
-        blob = cv2.dnn.blobFromImage(
-            cv2.resize( image, (300, 300) ), 0.007843, (300, 300), 127.5
-        )
-        net.setInput( blob )
-        detections = net.forward()
-        annotated_image, result, track_str = annotate_image( image, detections,  confidence_threshold, sort_tracker )
+        #blob = cv2.dnn.blobFromImage(
+        #    cv2.resize( image, (size, size) ), 0.007843, (size, size), 127.5
+        #)
+        detections =  detector(image)
+        annotated_image, result, track_str = annotate_image( image, detections, sort_tracker )
 
         # NOTE: This `recv` method is called in another thread,
         # so it must be thread-safe.
@@ -249,7 +252,7 @@ async def live_object_detection():
     webrtc_ctx = webrtc_streamer(
         key="object-detection",
         mode=WebRtcMode.SENDRECV,
-        rtc_configuration=RTC_CONFIGURATION,
+        #rtc_configuration=RTC_CONFIGURATION, #when deploy on remote host need stun server for camera connection
         video_frame_callback=frame_callback,
         media_stream_constraints={"video": True, "audio": False},
         async_processing=True,
@@ -281,35 +284,29 @@ async def live_object_detection():
     )
 
 
-def model_init():
-    """Object detection demo with MobileNet SSD.
+def model_init(model='yolov7-nms-640', confidence_threshold = 0.5):
+    """Object detection demo with YOLO v7.
     This model and code are based on
-    https://github.com/robmarkcole/object-detection-app
+    https://github.com/WongKinYiu/yolov7/releases
     """
-    MODEL_URL = "https://github.com/robmarkcole/object-detection-app/raw/master/model/MobileNetSSD_deploy.caffemodel"  # noqa: E501
-    MODEL_LOCAL_PATH = HERE / "./models/MobileNetSSD_deploy.caffemodel"
-    PROTOTXT_URL = "https://github.com/robmarkcole/object-detection-app/raw/master/model/MobileNetSSD_deploy.prototxt.txt"  # noqa: E501
-    PROTOTXT_LOCAL_PATH = HERE / "./models/MobileNetSSD_deploy.prototxt.txt"
 
-    download_file(MODEL_URL, MODEL_LOCAL_PATH, expected_size=23147564)
-    download_file(PROTOTXT_URL, PROTOTXT_LOCAL_PATH, expected_size=29353)
+    MODEL_LOCAL_PATH = config.MODEL_PATH / f'{config.STYLES[model]}.onnx'
+    if not Path(MODEL_LOCAL_PATH).exists():
+        download_file(config.MODEL_URL_ROOT + config.STYLES[model], MODEL_LOCAL_PATH, expected_size=721000)
 
     # Session-specific caching
     cache_key = "object_detection_dnn"
     if cache_key in st.session_state:
-        net = st.session_state[cache_key]
+        detector = st.session_state[cache_key]
     else:
-        net = cv2.dnn.readNetFromCaffe(str(PROTOTXT_LOCAL_PATH), str(MODEL_LOCAL_PATH))
-        st.session_state[cache_key] = net
+        detector = inference.init(model, conf_thres=confidence_threshold)
+        st.session_state[cache_key] = detector
     print(st.session_state[cache_key])
-    return net
+    return detector
 
-def app_object_track():
+def app_object_track(sort_max_age =5, sort_min_hits = 2, sort_iou_thresh = 0.9):
     # .... Initialize SORT ....
     # .........................
-    sort_max_age = 5
-    sort_min_hits = 2
-    sort_iou_thresh = DEFAULT_CONFIDENCE_THRESHOLD
     sort_tracker = Sort( max_age=sort_max_age,
                          min_hits=sort_min_hits,
                          iou_threshold=sort_iou_thresh )
@@ -320,7 +317,7 @@ class Detection(NamedTuple):
     name: str
     prob: float
 
-def annotate_image(image, detections, confidence_threshold, sort_tracker = None, frame = None ):
+def annotate_image(image, detections,  sort_tracker = None, frame = None ):
 
     # loop over the detections
     (h, w) = image.shape[:2]
@@ -332,15 +329,10 @@ def annotate_image(image, detections, confidence_threshold, sort_tracker = None,
         cv2.putText( image, f'frame:{frame}', (40,40), cv2.FONT_HERSHEY_SIMPLEX,
                      1, (240,240,240), 2 )
 
-    for i in np.arange(0, detections.shape[2]):
-        confidence = detections[0, 0, i, 2]
+    boxes, confidences, ids = detections
+    if len(detections[0]) > 0:
+        for box, confidence, idx in zip(boxes, confidences, ids):
 
-        if confidence > confidence_threshold:
-            # extract the index of the class label from the `detections`,
-            # then compute the (x, y)-coordinates of the bounding box for
-            # the object
-            idx = int(detections[0, 0, i, 1])
-            box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
             (startX, startY, endX, endY) = box.astype("int")
 
             name = CLASSES[idx]
@@ -371,7 +363,7 @@ def annotate_image(image, detections, confidence_threshold, sort_tracker = None,
                  for i, _ in enumerate( track.centroidarr )
                  if i < len( track.centroidarr ) - 1]
 
-                # draw boxes for visualization
+            # draw boxes for visualization
             if len( tracked_dets ) > 0:
                 bbox_xyxy = tracked_dets[:, :4]
                 identities = tracked_dets[:, 8]
