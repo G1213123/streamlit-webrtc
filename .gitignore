@@ -1,6 +1,7 @@
 models/
 runs/
 storage/
+venv/
 .idea/
 
 *.pt

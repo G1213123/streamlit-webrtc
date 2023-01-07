@@ -6,7 +6,7 @@ MODEL_PATH = HERE / "./models/"
 
 MODEL_URL = "https://s3.ap-northeast-2.wasabisys.com/pinto-model-zoo/307_YOLOv7/no-postprocess/resources.tar.gz"
 
-FFMPEG_PATH = r"C:\software\ffmpeg\bin\ffmpeg"
+FFMPEG_PATH = HERE / "./ffmpeg/ffmpeg"
 
 DEBUG = True
 

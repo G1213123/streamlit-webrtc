@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import List, NamedTuple
 import requests
 import tarfile
+import ffmpeg
 
 import pandas as pd
 
@@ -95,7 +96,7 @@ def download_file(url, download_to: Path, expected_size=None):
             progress_bar.empty()
 
 
-async def main():
+def main():
 
     st.header( "Object Tracking demo" )
 
@@ -111,22 +112,23 @@ async def main():
         page_titles,
     )
     with my_sidebar:
-        st.session_state['variable_container'] = variables_container()
+        variables = variables_container()
     st.subheader( page_title )
 
     page_func = pages[page_title]
-    await page_func()
+    page_func(variables)
 
-    logger.debug( "=== Alive threads ===" )
-    for thread in threading.enumerate():
-        if thread.is_alive():
-            logger.debug( f"  {thread.name} ({thread.ident})" )
+    #logger.debug( "=== Alive threads ===" )
+    #for thread in threading.enumerate():
+    #    if thread.is_alive():
+    #        logger.debug( f"  {thread.name} ({thread.ident})" )
 
 
 class variables_container:
     def __init__(self):
+
         with st.container():
-            style = st.selectbox( 'Choose the model', [i for i in config.STYLES.keys()], key='style' )
+            style = st.selectbox( 'Choose the model', list(config.STYLES.keys()), key='model_style' )
             confidence_threshold = st.slider(
                 "Confidence threshold", 0.0, 1.0, DEFAULT_CONFIDENCE_THRESHOLD, 0.05, key='confidence_threshold'
             )
@@ -135,16 +137,16 @@ class variables_container:
                 "Tracking Age (frames)", 0, 20, 10, 1, key='track_age'
             )
             track_hits = st.slider(
-                "Tracking hits", 0, st.session_state.track_age, 3, 1, key='track_hits'
+                "Tracking hits", 0, st.session_state.track_age, 3, 1, key='tracking_hits'
             )
             iou_thres = st.slider(
                 "IOU threshold", 0.0, 1.0, 0.7, 0.1, key='iou_thres'
             )
 
     def get_var(self):
-        return st.session_state['style'], \
+        return st.session_state['model_style'], \
             st.session_state['confidence_threshold'], st.session_state['track_age'], \
-            st.session_state['track_hits'], st.session_state['iou_thres']
+            st.session_state['tracking_hits'], st.session_state['iou_thres']
 
 
 def app_loopback():
@@ -152,11 +154,11 @@ def app_loopback():
     webrtc_streamer( key="loopback" )
 
 
-async def video_object_detection():
+def video_object_detection(variables):
     # usable video for detection
     # https://www.pexels.com/video/aerial-footage-of-vehicular-traffic-of-a-busy-street-intersection-at-night-3048225/
 
-    style, confidence_threshold, track_age, track_hits, iou_thres = st.session_state['variable_container'].get_var()
+    style, confidence_threshold, track_age, track_hits, iou_thres = variables.get_var()
 
     track_list = []
     result_list = []
@@ -209,6 +211,7 @@ async def video_object_detection():
 
             # Encode video streams into the H.264
             progress_txt.caption('Writing Video Results')
+
             os.system( '{} -i {} -vcodec libx264 {}'.format( config.FFMPEG_PATH, output_path, output_path_h264 ) )
             tfile.close()
             st.video( output_path_h264 )
@@ -238,8 +241,8 @@ class frame_counter_class():
         self.frame += count
         return self.frame
 
-async def live_object_detection():
-    style, confidence_threshold, track_age, track_hits, iou_thres = st.session_state['variable_container'].get_var()
+def live_object_detection(variables):
+    style, confidence_threshold, track_age, track_hits, iou_thres = variables.get_var()
 
     # public-stun-list.txt
     # https://gist.github.com/mondain/b0ec1cf5f60ae726202e
@@ -269,7 +272,7 @@ async def live_object_detection():
     webrtc_ctx = webrtc_streamer(
         key="object-detection",
         mode=WebRtcMode.SENDRECV,
-        # rtc_configuration=RTC_CONFIGURATION, #when deploy on remote host need stun server for camera connection
+        rtc_configuration=RTC_CONFIGURATION, #when deploy on remote host need stun server for camera connection
         video_frame_callback=frame_callback,
         media_stream_constraints={"video": True, "audio": False},
         async_processing=True,
@@ -444,5 +447,6 @@ if __name__ == "__main__":
     fsevents_logger = logging.getLogger( "fsevents" )
     fsevents_logger.setLevel( logging.WARNING )
 
-    loop = asyncio.new_event_loop()
-    loop.run_until_complete( main() )
+    #loop = asyncio.new_event_loop()
+    #loop.run_until_complete( main() )
+    main()
