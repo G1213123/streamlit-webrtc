@@ -11,6 +11,7 @@ from typing import List, NamedTuple
 import requests
 import tarfile
 import ffmpeg
+import subprocess
 
 import pandas as pd
 
@@ -170,11 +171,11 @@ def video_object_detection(variables):
             progress_bar = st.progress( 0 )
             progress = 0
 
-            tfile = tempfile.NamedTemporaryFile( delete=False )
+            tfile = tempfile.NamedTemporaryFile( delete=True )
             tfile.write( file.read() )
-            tfile.close()
 
             cap = cv2.VideoCapture( tfile.name )
+            tfile.close()
             width, height = int( cap.get( cv2.CAP_PROP_FRAME_WIDTH ) ), int( cap.get( cv2.CAP_PROP_FRAME_HEIGHT ) )
             fps = cap.get( cv2.CAP_PROP_FPS )
 
@@ -210,15 +211,25 @@ def video_object_detection(variables):
             output_path_h264 = output_path.replace( '.mp4', '_h264.mp4' )
 
             # Encode video streams into the H.264
-            progress_txt.caption('Writing Video Results')
+            progress_txt.caption('Encoding video for display')
 
-            os.system( '{} -i {} -vcodec libx264 {}'.format( config.FFMPEG_PATH, output_path, output_path_h264 ) )
+            args = (ffmpeg
+                    .input(output_path)
+                    .output( output_path_h264)
+                    .global_args( '-vcodec', 'libx264' )
+                    .get_args()
+                    )
+            process = subprocess.Popen(
+                [config.FFMPEG_PATH] + args)
+            process.wait()
+
             tfile.close()
             st.video( output_path_h264 )
             os.remove( output_path )
+
             progress_bar.progress( 100 )
             progress_txt.empty()
-            # labels_placeholder = st.empty()
+            os.remove( output_path_h264 )
             try:
                 track_list = [item.strip() for sublist in [element.split( "\n" ) for element in track_list] for item in
                               sublist]
