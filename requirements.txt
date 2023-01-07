@@ -56,7 +56,6 @@ pyparsing==3.0.9
 pyreadline3==3.4.1
 pyrsistent==0.19.3
 python-dateutil==2.8.2
-python-ffmpeg==1.0.16
 pytz==2022.7
 pytz-deprecation-shim==0.1.0.post0
 PyWavelets==1.4.1
