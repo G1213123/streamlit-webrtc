@@ -247,7 +247,7 @@ def live_object_detection(variables):
     # public-stun-list.txt
     # https://gist.github.com/mondain/b0ec1cf5f60ae726202e
     RTC_CONFIGURATION = RTCConfiguration(
-        {"iceServers": [{"urls": ["stun:stun.ucsb.edu:3478"]}]}
+        {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
     )
 
     frame_counter = frame_counter_class()
