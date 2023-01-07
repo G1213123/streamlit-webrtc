@@ -220,7 +220,7 @@ def video_object_detection(variables):
                     .get_args()
                     )
             process = subprocess.Popen(
-                [config.FFMPEG_PATH] + args)
+                ['ffmpeg'] + args)
             process.wait()
 
             tfile.close()
