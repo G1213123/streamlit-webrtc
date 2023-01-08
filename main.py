@@ -36,14 +36,27 @@ def generate_label_colors():
 
 COLORS = generate_label_colors()
 
+
+def color_row(s):
+    return COLORS[s.name]
+
+
 # Dump queue for real time detection result
-result_queue, track_queue = (queue.Queue(), queue.Queue())
+result_queue = (queue.Queue())
 
 
 class Detection( NamedTuple ):
     # Store detected object
-    name: str
+    frame: int
+    id: int
+    type: str
     prob: float
+    xmin: float
+    ymin: float
+    xmax: float
+    ymax: float
+    xmid: float
+    ymid: float
 
 
 class frame_counter_class():
@@ -127,7 +140,7 @@ def download_file(url, download_to: Path, expected_size=None):
         file = tarfile.open( name=output_file.name, mode="r|gz" )
         file.extractall( path=download_to.parent )
         file.close()
-        os.remove(output_file.name)
+        os.remove( output_file.name )
     # Finally, we remove these visual elements by calling .empty().
     finally:
         if weights_warning is not None:
@@ -158,12 +171,10 @@ def model_init(model, confidence_threshold=0.5):
     return detector
 
 
-def annotate_image(image, detections, sort_tracker=None, frame=None):
+def annotate_image(image, detections, sort_tracker, frame=None):
     # loop over the detections
     (h, w) = image.shape[:2]
     result: List[Detection] = []
-    track_result = []
-    txt_str = ""
 
     if frame:
         cv2.putText( image, f'frame:{frame}', (40, 40), cv2.FONT_HERSHEY_SIMPLEX,
@@ -176,17 +187,14 @@ def annotate_image(image, detections, sort_tracker=None, frame=None):
     for box, confidence, idx in zip( boxes, confidences, ids ):
         (startX, startY, endX, endY) = box.astype( "int" )
 
-        name = class_names[idx]
-        result.append( Detection( name=name, prob=float( confidence ) ) )
-
         # NOTE: We send in detected object class too
         dets_to_sort = np.vstack( (dets_to_sort,
                                    np.array( [startX, startY, endX, endY, confidence, idx] )) )
 
     # Run SORT
-    if sort_tracker is not None:
-        tracked_dets = sort_tracker.update( dets_to_sort )
-        tracks = sort_tracker.getTrackers()
+
+    tracked_dets = sort_tracker.update( dets_to_sort )
+    tracks = sort_tracker.getTrackers()
 
     # loop over tracks
     for track in tracks:
@@ -219,16 +227,12 @@ def annotate_image(image, detections, sort_tracker=None, frame=None):
                          1, COLORS[id], 2 )
             # cv2.circle(img, data, 6, color,-1)   #centroid of box
 
-            txt_str += "%s%i %s %f %f %f %f %f %f" % (f'{frame} ' if frame is not None else '',
-                                                      id, class_names[cat], int( box[0] ), int( box[1] ),
-                                                      int( box[2] ),
-                                                      int( box[3] ), int( box[0] + (box[2] * 0.5) ),
-                                                      int( box[1] + (
-                                                              box[3] * 0.5) ))
-            txt_str += "\n"
-            track_result.append( txt_str )
+            result.append( Detection( frame=frame if frame is not None else 0, id=id, type=class_names[cat],
+                                      prob=float( confidence ), xmin=box[0],
+                                      ymin=box[1], xmax=box[2], ymax=box[3], xmid=box[0] + (box[2] * 0.5),
+                                      ymid=box[1] + (box[3] * 0.5) ) )
 
-    return image, result, txt_str
+    return image, result
 
 
 def video_object_detection(variables):
@@ -241,30 +245,46 @@ def video_object_detection(variables):
 
     style, confidence_threshold, track_age, track_hits, iou_thres = variables.get_var()
 
-    track_list = []
     result_list = []
 
     file = st.file_uploader( 'Choose a video', type=['avi', 'mp4', 'mov'] )
-    if st.button( 'Detect' ):
-        if file is not None:
-            progress_txt = st.caption( 'Analysing Video' )
+    if file is not None:
+        tfile = tempfile.NamedTemporaryFile( delete=True )
+        tfile.write( file.read() )
+
+        cap = cv2.VideoCapture( tfile.name )
+        tfile.close()
+        width, height = int( cap.get( cv2.CAP_PROP_FRAME_WIDTH ) ), int( cap.get( cv2.CAP_PROP_FRAME_HEIGHT ) )
+        fps = cap.get( cv2.CAP_PROP_FPS )
+        total_frame = int( cap.get( cv2.CAP_PROP_FRAME_COUNT ) )
+
+        # size limited by streamlit cloud service
+        if width > 1920 or height > 1080:
+            st.warning( f"File resolution [{width}x{height}] exceeded limit [1920x1080], "
+                        f"please consider scale down the video", icon="⚠️" )
+        elif st.button( 'Detect' ):
+            progress_txt = st.caption( f'Analysing Video: 0 out of {total_frame} frames' )
             progress_bar = st.progress( 0 )
-            progress = 0
-
-            tfile = tempfile.NamedTemporaryFile( delete=True )
-            tfile.write( file.read() )
-
-            cap = cv2.VideoCapture( tfile.name )
-            tfile.close()
-            width, height = int( cap.get( cv2.CAP_PROP_FRAME_WIDTH ) ), int( cap.get( cv2.CAP_PROP_FRAME_HEIGHT ) )
-            fps = cap.get( cv2.CAP_PROP_FPS )
-
+            progress = frame_counter_class()
             # temp dir for saving the video to be processed by opencv
             if not os.path.exists( os.path.join( config.HERE, 'storage' ) ):
                 os.makedirs( os.path.join( config.HERE, 'storage' ) )
             output_path = os.path.join( config.HERE, f"storage\\{str( uuid.uuid4() )}.mp4" )
-            fourcc = cv2.VideoWriter_fourcc( *'mp4v' )
-            out = cv2.VideoWriter( output_path, fourcc, fps, (width, height) )
+
+            # encode cv2 output into h264
+            # https://stackoverflow.com/questions/30509573/writing-an-mp4-video-using-python-opencv
+            args = (ffmpeg
+                    .input( 'pipe:', format='rawvideo', pix_fmt='rgb24', s='{}x{}'.format( width, height ) )
+                    .output( output_path, pix_fmt='yuv420p', vcodec='libx264', r=fps, crf=37 )
+                    .overwrite_output()
+                    .get_args()
+                    )
+            # check if deployed at cloud or local host
+            if platform.processor():
+                ffmpeg_source = config.FFMPEG_PATH
+            else:
+                ffmpeg_source = 'ffmpeg'
+            process = subprocess.Popen( [ffmpeg_source] + args, stdin=subprocess.PIPE )
 
             # init object detector and tracker
             detector = model_init( style, confidence_threshold )
@@ -279,56 +299,32 @@ def video_object_detection(variables):
                     continue
                 detections = detector( frame )
                 # Update object localizer
-                image, result, track_str = annotate_image( frame, detections, sort_tracker, progress )
-                out.write( image )
+                image, result = annotate_image( frame, detections, sort_tracker, progress( 0 ) )
+                process.stdin.write( cv2.cvtColor( image, cv2.COLOR_BGR2RGB ).astype( np.uint8 ).tobytes() )
                 result_list.append( result )
-                track_list.append( track_str )
 
                 # progress of analysis
-                progress += 1
-                progress_bar.progress( progress / int( cap.get( cv2.CAP_PROP_FRAME_COUNT ) ) * 0.8 )
+                progress_bar.progress( progress( 1 ) / total_frame )
+                progress_txt.caption( f'Analysing Video: {progress( 0 )} out of {total_frame} frames' )
 
-            cap.release()
-            out.release()
-
-            output_path_h264 = output_path.replace( '.mp4', '_h264.mp4' )
-
-            # Encode video streams into the H.264, streamlit requirement
-            progress_txt.caption( 'Encoding video for display' )
-
-            args = (ffmpeg
-                    .input( output_path )
-                    .output( output_path_h264 )
-                    .global_args( '-vcodec', 'libx264' )
-                    .get_args()
-                    )
-            # check if deployed at cloud or local host
-            if platform.processor():
-                ffmpeg_source = config.FFMPEG_PATH
-            else:
-                ffmpeg_source = 'ffmpeg'
-            process = subprocess.Popen(
-                [ffmpeg_source] + args )
+            process.stdin.close()
             process.wait()
-
+            process.kill()
+            cap.release()
             tfile.close()
-            st.video( output_path_h264 )
+
+            st.video( output_path )
             os.remove( output_path )
 
             progress_bar.progress( 100 )
             progress_txt.empty()
-            os.remove( output_path_h264 )
+
             # Dumping analysis result into table
             try:
-                track_list = [item.strip() for sublist in [element.split( "\n" ) for element in track_list] for item in
-                              sublist]
-                track_list = [e.split() for e in track_list if e != '']
-                track_table = pd.DataFrame( track_list,
-                                            columns=['frame', 'id', 'class', 'xmin', 'ymin', 'xmax', 'ymax', 'xmid',
-                                                     'ymid'] )
-                # track_table.insert(loc=2, column='type', value=track_table['class'].apply(lambda x:CLASSES[x]))
-                # labels_placeholder.table( result_list )
-                st.dataframe( track_table )
+                st.dataframe( pd.DataFrame.from_records( [item for sublist in result_list for item in sublist],
+                                                         columns=Detection._fields ),
+                              # .style.apply(color_row, axis=1), TODO: add color to df by row index
+                              use_container_width=True )
             except ValueError as e:
                 'No tracking data found'
                 e
@@ -356,13 +352,12 @@ def live_object_detection(variables):
         image = frame.to_ndarray( format="bgr24" )
         detections = detector( image )
         counter = frame_counter
-        annotated_image, result, track_str = annotate_image( image, detections, sort_tracker, counter() )
+        annotated_image, result = annotate_image( image, detections, sort_tracker, counter() )
         counter( 1 )
 
         # NOTE: This `recv` method is called in another thread,
         # so it must be thread-safe.
         result_queue.put( result )
-        track_queue.put( track_str )
 
         return av.VideoFrame.from_ndarray( annotated_image, format="bgr24" )
 
@@ -387,17 +382,9 @@ def live_object_detection(variables):
             while True:
                 try:
                     result = result_queue.get( timeout=1.0 )
-                    track_list = track_queue.get( timeout=1.0 )
                 except queue.Empty:
                     result = None
-                    track_list = None
                 labels_placeholder.dataframe( result )
-                if track_list:
-                    track_list = [row for row in track_list.split( '\n' )]
-                    track_list = pd.DataFrame( [item.split() for item in track_list if item],
-                                               columns=['frame', 'id', 'class', 'xmin', 'ymin', 'xmax', 'ymax', 'xmid',
-                                                        'ymid'] )
-                    track_placeholder.dataframe( track_list )
 
 
 def main():
