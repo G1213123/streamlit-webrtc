@@ -1,6 +1,8 @@
 models/
 runs/
 storage/
+venv/
+ffmpeg/
 .idea/
 
 *.pt
