@@ -126,7 +126,8 @@ def download_file(url, download_to: Path, expected_size=None):
                     progress_bar.progress( min( counter / length, 1.0 ) )
         file = tarfile.open( name=output_file.name, mode="r|gz" )
         file.extractall( path=download_to.parent )
-        os.remove(output_file)
+        file.close()
+        os.remove(output_file.name)
     # Finally, we remove these visual elements by calling .empty().
     finally:
         if weights_warning is not None:
