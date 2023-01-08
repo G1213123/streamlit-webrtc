@@ -263,7 +263,7 @@ def video_object_detection(variables):
             if not os.path.exists( os.path.join( config.HERE, 'storage' ) ):
                 os.makedirs( os.path.join( config.HERE, 'storage' ) )
             output_path = os.path.join( config.HERE, f"storage\\{str( uuid.uuid4() )}.mp4" )
-            fourcc = cv2.VideoWriter_fourcc( *'mp4v' )
+            fourcc = cv2.VideoWriter_fourcc( *'divx' )
             out = cv2.VideoWriter( output_path, fourcc, fps, (width, height) )
 
             # init object detector and tracker
@@ -290,6 +290,7 @@ def video_object_detection(variables):
 
             cap.release()
             out.release()
+            tfile.close()
 
             output_path_h264 = output_path.replace( '.mp4', '_h264.mp4' )
 
@@ -311,7 +312,6 @@ def video_object_detection(variables):
                 [ffmpeg_source] + args )
             process.wait()
 
-            tfile.close()
             st.video( output_path_h264 )
             os.remove( output_path )
 
