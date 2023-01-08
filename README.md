@@ -1,6 +1,6 @@
 ## streamlit-webrtc
 
-This app is made to run object tracking using both online real-time and fileuploaded video
+This app is made to run object tracking using both online real-time and file uploaded video
 
 This app makes use of components adopted from: 
 - [streamlit-webrtc](https://github.com/whitphx/streamlit-webrtc)
