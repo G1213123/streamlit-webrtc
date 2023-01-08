@@ -249,7 +249,7 @@ def video_object_detection(variables):
         if file is not None:
             progress_txt = st.caption( 'Analysing Video' )
             progress_bar = st.progress( 0 )
-            progress = 0
+            progress = frame_counter_class()
 
             tfile = tempfile.NamedTemporaryFile( delete=True )
             tfile.write( file.read() )
@@ -264,7 +264,20 @@ def video_object_detection(variables):
                 os.makedirs( os.path.join( config.HERE, 'storage' ) )
             output_path = os.path.join( config.HERE, f"storage\\{str( uuid.uuid4() )}.mp4" )
             fourcc = cv2.VideoWriter_fourcc( *'divx' )
-            out = cv2.VideoWriter( output_path, fourcc, fps, (width, height) )
+            #out = open(output_path, 'w')
+
+            args = (ffmpeg
+                    .input( 'pipe:',format='rawvideo', pix_fmt='rgb24',s='{}x{}'.format(width,height) )
+                    .output( output_path ,pix_fmt='yuv420p',vcodec='libx264',r=fps,crf=37)
+                    .overwrite_output()
+                    .get_args()
+                    )
+            # check if deployed at cloud or local host
+            if platform.processor():
+                ffmpeg_source = config.FFMPEG_PATH
+            else:
+                ffmpeg_source = 'ffmpeg'
+            process = subprocess.Popen( [ffmpeg_source] + args, stdin=subprocess.PIPE)
 
             # init object detector and tracker
             detector = model_init( style, confidence_threshold )
@@ -279,45 +292,29 @@ def video_object_detection(variables):
                     continue
                 detections = detector( frame )
                 # Update object localizer
-                image, result, track_str = annotate_image( frame, detections, sort_tracker, progress )
-                out.write( image )
+                image, result, track_str = annotate_image( frame, detections, sort_tracker, progress(0)  )
+                process.stdin.write(cv2.cvtColor(image, cv2.COLOR_BGR2RGB).astype(np.uint8).tobytes())
+                #process.wait()
                 result_list.append( result )
                 track_list.append( track_str )
 
                 # progress of analysis
-                progress += 1
-                progress_bar.progress( progress / int( cap.get( cv2.CAP_PROP_FRAME_COUNT ) ) * 0.8 )
+                progress (1)
+                progress_bar.progress( progress(0) / int( cap.get( cv2.CAP_PROP_FRAME_COUNT ) ) )
 
+            process.stdin.close()
+            process.wait()
+            process.kill()
             cap.release()
-            out.release()
+            #out.release()
             tfile.close()
 
-            output_path_h264 = output_path.replace( '.mp4', '_h264.mp4' )
-
-            # Encode video streams into the H.264, streamlit requirement
-            progress_txt.caption( 'Encoding video for display' )
-
-            args = (ffmpeg
-                    .input( output_path )
-                    .output( output_path_h264 )
-                    .global_args( '-vcodec', 'libx264' )
-                    .get_args()
-                    )
-            # check if deployed at cloud or local host
-            if platform.processor():
-                ffmpeg_source = config.FFMPEG_PATH
-            else:
-                ffmpeg_source = 'ffmpeg'
-            process = subprocess.Popen(
-                [ffmpeg_source] + args )
-            process.wait()
-
-            st.video( output_path_h264 )
+            st.video( output_path )
             os.remove( output_path )
 
             progress_bar.progress( 100 )
             progress_txt.empty()
-            os.remove( output_path_h264 )
+
             # Dumping analysis result into table
             try:
                 track_list = [item.strip() for sublist in [element.split( "\n" ) for element in track_list] for item in
