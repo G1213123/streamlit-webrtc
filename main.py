@@ -86,14 +86,6 @@ def download_file(url, download_to: Path, expected_size=None):
     """
     This code is based on
     https://github.com/streamlit/demo-self-driving/blob/230245391f2dda0cb464008195a470751c01770b/streamlit_app.py#L48  # noqa: E501
-    :param url:
-    :type url:
-    :param download_to:
-    :type download_to:
-    :param expected_size:
-    :type expected_size:
-    :return:
-    :rtype:
     """
     # Don't download the file twice.
     # (If possible, verify the download using the file length.)
@@ -134,6 +126,8 @@ def download_file(url, download_to: Path, expected_size=None):
                     progress_bar.progress( min( counter / length, 1.0 ) )
         file = tarfile.open( name=output_file.name, mode="r|gz" )
         file.extractall( path=download_to.parent )
+        file.close()
+        os.remove(output_file.name)
     # Finally, we remove these visual elements by calling .empty().
     finally:
         if weights_warning is not None:
