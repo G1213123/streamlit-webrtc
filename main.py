@@ -95,6 +95,13 @@ class st_variables_container:
             st.session_state['tracking_hits'], st.session_state['iou_thres']
 
 
+def gcd(a, b):
+    if b == 0:
+        return a
+    return gcd( b, a % b )
+
+
+
 def download_file(url, download_to: Path, expected_size=None):
     """
     This code is based on
@@ -262,72 +269,86 @@ def video_object_detection(variables):
         if width > 1920 or height > 1080:
             st.warning( f"File resolution [{width}x{height}] exceeded limit [1920x1080], "
                         f"please consider scale down the video", icon="⚠️" )
-        elif st.button( 'Detect' ):
-            progress_txt = st.caption( f'Analysing Video: 0 out of {total_frame} frames' )
-            progress_bar = st.progress( 0 )
-            progress = frame_counter_class()
-            # temp dir for saving the video to be processed by opencv
-            if not os.path.exists( os.path.join( config.HERE, 'storage' ) ):
-                os.makedirs( os.path.join( config.HERE, 'storage' ) )
-            output_path = os.path.join( config.HERE, f"storage\\{str( uuid.uuid4() )}.mp4" )
+        else:
+            def best_match_ratio(w,h,style_list):
+                diff = 2**256
+                match = ''
+                for s in style_list:
+                    s_h, s_w = list(map(int,s.split('_')[1].split('x')))
+                    if abs(w/s_w - h/s_h) < diff:
+                        diff = abs(w/s_w - h/s_h)
+                        match = s
+                return match
+            gcd_wh = gcd( width, height )
+            st.info( f"Uploaded video has aspect ratio of [{width // gcd_wh}x{height // gcd_wh}], "
+                     f"best detection with model {best_match_ratio(width,height,config.STYLES)}"
+                     )
+            if st.button( 'Detect' ):
+                progress_txt = st.caption( f'Analysing Video: 0 out of {total_frame} frames' )
+                progress_bar = st.progress( 0 )
+                progress = frame_counter_class()
+                # temp dir for saving the video to be processed by opencv
+                if not os.path.exists( os.path.join( config.HERE, 'storage' ) ):
+                    os.makedirs( os.path.join( config.HERE, 'storage' ) )
+                output_path = os.path.join( config.HERE, f"storage\\{str( uuid.uuid4() )}.mp4" )
 
-            # encode cv2 output into h264
-            # https://stackoverflow.com/questions/30509573/writing-an-mp4-video-using-python-opencv
-            args = (ffmpeg
-                    .input( 'pipe:', format='rawvideo', pix_fmt='rgb24', s='{}x{}'.format( width, height ) )
-                    .output( output_path, pix_fmt='yuv420p', vcodec='libx264', r=fps, crf=37 )
-                    .overwrite_output()
-                    .get_args()
-                    )
-            # check if deployed at cloud or local host
-            if platform.processor():
-                ffmpeg_source = config.FFMPEG_PATH
-            else:
-                ffmpeg_source = 'ffmpeg'
-            process = subprocess.Popen( [ffmpeg_source] + args, stdin=subprocess.PIPE )
+                # encode cv2 output into h264
+                # https://stackoverflow.com/questions/30509573/writing-an-mp4-video-using-python-opencv
+                args = (ffmpeg
+                        .input( 'pipe:', format='rawvideo', pix_fmt='rgb24', s='{}x{}'.format( width, height ) )
+                        .output( output_path, pix_fmt='yuv420p', vcodec='libx264', r=fps, crf=37 )
+                        .overwrite_output()
+                        .get_args()
+                        )
+                # check if deployed at cloud or local host
+                if platform.processor():
+                    ffmpeg_source = config.FFMPEG_PATH
+                else:
+                    ffmpeg_source = 'ffmpeg'
+                process = subprocess.Popen( [ffmpeg_source] + args, stdin=subprocess.PIPE )
 
-            # init object detector and tracker
-            detector = model_init( style, confidence_threshold )
-            sort_tracker = Sort( track_age, track_hits, iou_thres )
-            while cap.isOpened():
+                # init object detector and tracker
+                detector = model_init( style, confidence_threshold )
+                sort_tracker = Sort( track_age, track_hits, iou_thres )
+                while cap.isOpened():
+                    try:
+                        ret, frame = cap.read()
+                        if not ret:
+                            break
+                    except Exception as e:
+                        print( e )
+                        continue
+                    detections = detector( frame )
+                    # Update object localizer
+                    image, result = annotate_image( frame, detections, sort_tracker, progress( 0 ) )
+                    process.stdin.write( cv2.cvtColor( image, cv2.COLOR_BGR2RGB ).astype( np.uint8 ).tobytes() )
+                    result_list.append( result )
+
+                    # progress of analysis
+                    progress_bar.progress( progress( 1 ) / total_frame )
+                    progress_txt.caption( f'Analysing Video: {progress( 0 )} out of {total_frame} frames' )
+
+                process.stdin.close()
+                process.wait()
+                process.kill()
+                cap.release()
+                tfile.close()
+
+                st.video( output_path )
+                os.remove( output_path )
+
+                progress_bar.progress( 100 )
+                progress_txt.empty()
+
+                # Dumping analysis result into table
                 try:
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-                except Exception as e:
-                    print( e )
-                    continue
-                detections = detector( frame )
-                # Update object localizer
-                image, result = annotate_image( frame, detections, sort_tracker, progress( 0 ) )
-                process.stdin.write( cv2.cvtColor( image, cv2.COLOR_BGR2RGB ).astype( np.uint8 ).tobytes() )
-                result_list.append( result )
-
-                # progress of analysis
-                progress_bar.progress( progress( 1 ) / total_frame )
-                progress_txt.caption( f'Analysing Video: {progress( 0 )} out of {total_frame} frames' )
-
-            process.stdin.close()
-            process.wait()
-            process.kill()
-            cap.release()
-            tfile.close()
-
-            st.video( output_path )
-            os.remove( output_path )
-
-            progress_bar.progress( 100 )
-            progress_txt.empty()
-
-            # Dumping analysis result into table
-            try:
-                st.dataframe( pd.DataFrame.from_records( [item for sublist in result_list for item in sublist],
-                                                         columns=Detection._fields ),
-                              # .style.apply(color_row, axis=1), TODO: add color to df by row index
-                              use_container_width=True )
-            except ValueError as e:
-                'No tracking data found'
-                e
+                    st.dataframe( pd.DataFrame.from_records( [item for sublist in result_list for item in sublist],
+                                                             columns=Detection._fields ),
+                                  # .style.apply(color_row, axis=1), TODO: add color to df by row index
+                                  use_container_width=True )
+                except ValueError as e:
+                    'No tracking data found'
+                    e
 
 
 def live_object_detection(variables):
