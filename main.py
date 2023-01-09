@@ -94,14 +94,24 @@ class st_variables_container:
             st.session_state['confidence_threshold'], st.session_state['track_age'], \
             st.session_state['tracking_hits'], st.session_state['iou_thres']
 
-
+@st.experimental_memo
 def gcd(a, b):
     if b == 0:
         return a
     return gcd( b, a % b )
 
+@st.experimental_memo
+def best_match_ratio(w, h, style_list):
+    diff = float( 'inf' )
+    match = ''
+    for s in style_list:
+        s_h, s_w = list( map( int, s.split( '_' )[1].split( 'x' ) ) )
+        if abs( w / s_w - h / s_h ) < diff:
+            diff = abs( w / s_w - h / s_h )
+            match = s
+    return match
 
-
+@st.experimental_memo
 def download_file(url, download_to: Path, expected_size=None):
     """
     This code is based on
@@ -155,7 +165,7 @@ def download_file(url, download_to: Path, expected_size=None):
         if progress_bar is not None:
             progress_bar.empty()
 
-
+@st.experimental_singleton
 def model_init(model, confidence_threshold=0.5):
     """Object detection demo with YOLO v7.
     This model and code are based on
@@ -167,14 +177,7 @@ def model_init(model, confidence_threshold=0.5):
         download_file( config.MODEL_URL, Path( MODEL_LOCAL_PATH ).parent / "resources.tar.gz",
                        expected_size=1007618059 )
 
-    # Session-specific caching
-    cache_key = "object_detection_dnn"
-    if cache_key in st.session_state:
-        detector = st.session_state[cache_key]
-    else:
-        detector = inference.init( model, conf_thres=confidence_threshold )
-        st.session_state[cache_key] = detector
-    print( st.session_state[cache_key] )
+    detector = inference.init( model, conf_thres=confidence_threshold )
     return detector
 
 
@@ -271,15 +274,6 @@ def video_object_detection(variables):
             st.warning( f"File resolution [{width}x{height}] exceeded limit [1920x1080], "
                         f"please consider scale down the video", icon="⚠️" )
         else:
-            def best_match_ratio(w,h,style_list):
-                diff = 2**256
-                match = ''
-                for s in style_list:
-                    s_h, s_w = list(map(int,s.split('_')[1].split('x')))
-                    if abs(w/s_w - h/s_h) < diff:
-                        diff = abs(w/s_w - h/s_h)
-                        match = s
-                return match
             gcd_wh = gcd( width, height )
             st.info( f"Uploaded video has aspect ratio of [{width // gcd_wh}:{height // gcd_wh}], "
                      f"best detection with model {best_match_ratio(width,height,config.STYLES)}"
@@ -302,10 +296,7 @@ def video_object_detection(variables):
                         .get_args()
                         )
                 # check if deployed at cloud or local host
-                if platform.processor():
-                    ffmpeg_source = config.FFMPEG_PATH
-                else:
-                    ffmpeg_source = 'ffmpeg'
+                ffmpeg_source = config.FFMPEG_PATH if platform.processor() else 'ffmpeg'
                 process = subprocess.Popen( [ffmpeg_source] + args, stdin=subprocess.PIPE )
 
                 # init object detector and tracker
@@ -349,14 +340,13 @@ def video_object_detection(variables):
                                   use_container_width=True )
                 except ValueError as e:
                     'No tracking data found'
-                    e
 
 
-def live_object_detection(variables):
+def live_object_detection(_variables):
     """
     #This component was originated from https://github.com/whitphx/streamlit-webrtc
     """
-    style, confidence_threshold, track_age, track_hits, iou_thres = variables.get_var()
+    style, confidence_threshold, track_age, track_hits, iou_thres = _variables.get_var()
 
     # public-stun-list.txt
     # https://gist.github.com/mondain/b0ec1cf5f60ae726202e
