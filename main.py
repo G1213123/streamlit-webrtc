@@ -177,7 +177,14 @@ def model_init(model, confidence_threshold=0.5):
         download_file( config.MODEL_URL, Path( MODEL_LOCAL_PATH ).parent / "resources.tar.gz",
                        expected_size=1007618059 )
 
-    detector = inference.init( model, conf_thres=confidence_threshold )
+    # Session-specific caching
+    cache_key = "object_detection_dnn"
+    if cache_key in st.session_state:
+        detector = st.session_state[cache_key]
+    else:
+        detector = inference.init( model, conf_thres=confidence_threshold )
+        st.session_state[cache_key] = detector
+    print( st.session_state[cache_key] )
     return detector
 
 
@@ -340,13 +347,14 @@ def video_object_detection(variables):
                                   use_container_width=True )
                 except ValueError as e:
                     'No tracking data found'
+                    e
 
 
-def live_object_detection(_variables):
+def live_object_detection(variables):
     """
     #This component was originated from https://github.com/whitphx/streamlit-webrtc
     """
-    style, confidence_threshold, track_age, track_hits, iou_thres = _variables.get_var()
+    style, confidence_threshold, track_age, track_hits, iou_thres = variables.get_var()
 
     # public-stun-list.txt
     # https://gist.github.com/mondain/b0ec1cf5f60ae726202e
