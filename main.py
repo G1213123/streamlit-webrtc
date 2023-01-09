@@ -218,7 +218,8 @@ def annotate_image(image, detections, sort_tracker, frame=None):
     # draw boxes for visualization
     if len( tracked_dets ) > 0:
         bbox_xyxy = tracked_dets[:, :4]
-        identities = tracked_dets[:, 8]
+        identities = tracked_dets[:, 9]
+        conf = tracked_dets[:, 5]
         categories = tracked_dets[:, 4]
 
         for i, box in enumerate( bbox_xyxy ):
@@ -226,7 +227,7 @@ def annotate_image(image, detections, sort_tracker, frame=None):
             cat = int( categories[i] ) if categories is not None else 0
             id = int( identities[i] ) if identities is not None else 0
             data = (int( (box[0] + box[2]) / 2 ), (int( (box[1] + box[3]) / 2 )))
-            label = str( id ) + ":" + class_names[cat] + "-" + str( confidence )
+            label = str( id ) + ":" + class_names[cat] + "-" + "%.2f" % conf[i]
             (w, h), _ = cv2.getTextSize( label, cv2.FONT_HERSHEY_SIMPLEX, 1, 2 )
             cv2.rectangle( image, (x1, y1), (x2, y2), COLORS[id], 2 )
             # cv2.rectangle( image, (x1, y1 - 20), (x1 + w, y1), COLORS[track.id], -1 )
@@ -235,7 +236,7 @@ def annotate_image(image, detections, sort_tracker, frame=None):
             # cv2.circle(img, data, 6, color,-1)   #centroid of box
 
             result.append( Detection( frame=frame if frame is not None else 0, id=id, type=class_names[cat],
-                                      prob=float( confidence ), xmin=box[0],
+                                      prob=float( conf[i] ), xmin=box[0],
                                       ymin=box[1], xmax=box[2], ymax=box[3], xmid=box[0] + (box[2] * 0.5),
                                       ymid=box[1] + (box[3] * 0.5) ) )
 
@@ -280,7 +281,7 @@ def video_object_detection(variables):
                         match = s
                 return match
             gcd_wh = gcd( width, height )
-            st.info( f"Uploaded video has aspect ratio of [{width // gcd_wh}x{height // gcd_wh}], "
+            st.info( f"Uploaded video has aspect ratio of [{width // gcd_wh}:{height // gcd_wh}], "
                      f"best detection with model {best_match_ratio(width,height,config.STYLES)}"
                      )
             if st.button( 'Detect' ):
