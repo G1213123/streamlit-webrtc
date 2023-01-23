@@ -381,8 +381,10 @@ def live_object_detection(variables):
     # public-stun-list.txt
     # https://gist.github.com/mondain/b0ec1cf5f60ae726202e
     RTC_CONFIGURATION = RTCConfiguration(
-        {"iceServers": [{"urls": [
-                                  "stun:stun3.l.google.com:19302"]}]}
+        {"iceServers": [{"urls": st.secrets['URL'],
+                         "username": st.secrets['USERNAME'],
+                         "credential": st.secrets['CREDENTIAL'],
+                         }]}
     )
 
     # init frame counter, object detector and tracker
