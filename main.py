@@ -19,11 +19,13 @@ import av
 import cv2
 import numpy as np
 import streamlit as st
+from streamlit_drawable_canvas import st_canvas
 from streamlit_webrtc import (
     RTCConfiguration,
     WebRtcMode,
     webrtc_streamer,
 )
+from PIL import Image
 
 st.set_page_config( layout="wide" )
 logger = logging.getLogger( __name__ )
@@ -276,6 +278,26 @@ def video_object_detection(variables):
         fps = cap.get( cv2.CAP_PROP_FPS )
         total_frame = int( cap.get( cv2.CAP_PROP_FRAME_COUNT ) )
 
+        with st.expander("Setup Counter"):
+            drawing_mode = st.selectbox(
+                "Drawing tool:",
+                ("line","freedraw" , "transform"),
+            )
+            success,image = cap.read()
+            canvas_result = st_canvas(
+                width=640,
+                height=height*640/width,
+                background_image=Image.fromarray(cv2.cvtColor(image,cv2.COLOR_BGR2RGB)),
+                stroke_width=1,
+                drawing_mode=drawing_mode, key="canvas"
+            )
+
+            if canvas_result.json_data is not None:
+                objects = pd.json_normalize(canvas_result.json_data["objects"])
+                for col in objects.select_dtypes(include=["object"]).columns:
+                    objects[col] = objects[col].astype("str")
+                st.dataframe(objects)
+
         # size limited by streamlit cloud service
         if width > 1920 or height > 1080:
             st.warning( f"File resolution [{width}x{height}] exceeded limit [1920x1080], "
@@ -359,7 +381,9 @@ def live_object_detection(variables):
     # public-stun-list.txt
     # https://gist.github.com/mondain/b0ec1cf5f60ae726202e
     RTC_CONFIGURATION = RTCConfiguration(
-        {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+        {"iceServers": [{"urls": ["stun:stun.l.google.com:19302",
+                                  "stun:stun2.l.google.com:19302",
+                                  "stun:stun3.l.google.com:19302"]}]}
     )
 
     # init frame counter, object detector and tracker
