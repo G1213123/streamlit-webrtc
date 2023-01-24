@@ -31,6 +31,7 @@ from PIL import Image
 st.set_page_config(layout="wide")
 logger = logging.getLogger(__name__)
 
+pd.options.display.float_format = '{:.2f}'.format
 
 @st.experimental_singleton
 def generate_label_colors():
@@ -42,10 +43,6 @@ COLORS = generate_label_colors()
 
 def color_row(s):
     return COLORS[s.name]
-
-
-# Dump queue for real time detection result
-result_queue = (queue.Queue())
 
 
 class Detection(NamedTuple):
@@ -70,6 +67,31 @@ class frame_counter_class():
     def __call__(self, count=0):
         self.frame += count
         return self.frame
+
+class st_counter_setup_container:
+    def __init__(self, image, width, height, screen_width = 640):
+        self.display_scale = width/screen_width
+        self.counters_df_display = None
+        self.counters_table = None
+        with st.expander("Setup Counter"):
+            drawing_mode = st.selectbox(
+                "Drawing tool:",
+                ("line", "freedraw", "transform"),
+            )
+            canvas_result = st_canvas(
+                width=screen_width,
+                height=height // self.display_scale,
+                background_image=Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB)),
+                stroke_width=1,
+                drawing_mode=drawing_mode, key="canvas"
+            )
+
+            if canvas_result.json_data is not None:
+                if len(canvas_result.json_data['objects']) >0:
+                    counters_table = format_counters_display(pd.json_normalize(canvas_result.json_data['objects']))
+                    self.counters_df_display = st.dataframe(counters_table.style.set_precision(1))
+                    self.counters_table = counters_table
+
 
 
 class st_variables_container:
@@ -117,6 +139,10 @@ class point():
         self.y += other.y
         return self
 
+    def __iter__(self):
+        for i in [self.x, self.y]:
+            yield i
+
 
 # https://stackoverflow.com/questions/3838329/how-can-i-check-if-two-segments-intersect
 def ccw(A, B, C):
@@ -124,18 +150,19 @@ def ccw(A, B, C):
 
 
 class passing_object_counter():
-    def __init__(self, vertexes: List[point], scale: float = 1.0):
-        self.vetexes = [v * scale for v in vertexes]
+    def __init__(self, vertices: List[point], id, scale: float = 1.0):
+        self.vertices = [v * scale for v in vertices]
         self.count = 0
+        self.id = int(id)
 
     @classmethod
-    def init_centroid(cls, centroid, x_offset, y_offset, scale = 1.0):
+    def init_centroid(cls, centroid, x_offset, y_offset, id, scale=1.0):
         p1, p2 = copy.deepcopy(centroid), copy.deepcopy(centroid)
-        vertexes = [p1 + point(x_offset, y_offset), p2 + point(-x_offset, -y_offset)]
-        return cls(vertexes, scale)
+        vertices = [p1 + point(x_offset, y_offset), p2 + point(-x_offset, -y_offset)]
+        return cls(vertices, id, scale)
 
-    def check_intersect(self, path_vertexes: List[point]):
-        A, B, C, D = self.vetexes[0], self.vetexes[1], path_vertexes[0], path_vertexes[1]
+    def check_intersect(self, path_vertices: List[point]):
+        A, B, C, D = self.vertices[0], self.vertices[1], path_vertices[0], path_vertices[1]
         if ccw(A, C, D) != ccw(B, C, D) and ccw(A, B, C) != ccw(A, B, D):
             self.count += 1
         return self.count
@@ -215,6 +242,22 @@ def download_file(url, download_to: Path, expected_size=None):
             progress_bar.empty()
 
 
+def format_counters_display(objects:pd.DataFrame, results=None):
+    show_columns = ['type', 'left', 'top', 'x1', 'x2', 'y1', 'y2', 'width', 'height']
+    if len(objects.index) > 0:
+        objects = objects[show_columns]
+        # for col in objects.select_dtypes(include='float64').columns:
+        #   objects.style.format({col: '{:,.2f}'.format})
+            #    objects[col] = objects[col].apply(lambda x: ('{:,.1f}'.format(x)).rstrip("0"))
+
+    else:
+        return None
+    if results is not None and len(results) == len(objects.index):
+        objects['count'] = [r.count for r in results]
+
+    return objects
+
+
 @st.experimental_singleton
 def model_init(model, confidence_threshold=0.5):
     """Object detection demo with YOLO v7.
@@ -238,7 +281,7 @@ def model_init(model, confidence_threshold=0.5):
     return detector
 
 
-def annotate_image(image, detections, sort_tracker, frame=None):
+def track_and_annotate_detections(image, detections, sort_tracker, passing_counters=None, frame=None):
     # loop over the detections
     (h, w) = image.shape[:2]
     result: List[Detection] = []
@@ -258,8 +301,7 @@ def annotate_image(image, detections, sort_tracker, frame=None):
         dets_to_sort = np.vstack((dets_to_sort,
                                   np.array([startX, startY, endX, endY, confidence, idx])))
 
-    # Run SORT
-
+    # Run SORT and get tracked objects
     tracked_dets = sort_tracker.update(dets_to_sort)
     tracks = sort_tracker.getTrackers()
 
@@ -267,6 +309,13 @@ def annotate_image(image, detections, sort_tracker, frame=None):
     for track in tracks:
         # color = compute_color_for_labels(id)
         # draw colored tracks
+
+        # update passing counter with the latest tracked objects path
+        if len(track.centroidarr) > 1:
+            track_last_path = [point(*track.centroidarr[-1]), point(*track.centroidarr[-2])]
+            for p in passing_counters:
+                p.check_intersect(track_last_path)
+
         drawn_track = [cv2.line(image, (int(track.centroidarr[i][0]),
                                         int(track.centroidarr[i][1])),
                                 (int(track.centroidarr[i + 1][0]),
@@ -274,6 +323,13 @@ def annotate_image(image, detections, sort_tracker, frame=None):
                                 COLORS[track.id + 1], thickness=2)
                        for i, _ in enumerate(track.centroidarr)
                        if i < len(track.centroidarr) - 1]
+
+        for p in passing_counters:
+            cv2.line(image, tuple(map(int,p.vertices[0])), tuple(map(int,p.vertices[1])),
+                     COLORS[p.id], thickness=2)
+            label = f'Counter[{p.id}]: {p.count}'
+            cv2.putText(image, label, tuple(map(int,copy.deepcopy(p.vertices[0]) + point(5,5))), cv2.FONT_HERSHEY_SIMPLEX,
+                        1, COLORS[p.id], 2)
 
     # draw boxes for visualization
     if len(tracked_dets) > 0:
@@ -318,41 +374,25 @@ def video_object_detection(variables):
 
     file = st.file_uploader('Choose a video', type=['avi', 'mp4', 'mov'])
     if file is not None:
+        # save the uploaded file to a temporary location
         tfile = tempfile.NamedTemporaryFile(delete=True)
         tfile.write(file.read())
-
         cap = cv2.VideoCapture(tfile.name)
         tfile.close()
+
         width, height = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = cap.get(cv2.CAP_PROP_FPS)
         total_frame = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        canvas_scale = width / 640
+        success, image = cap.read()
 
-        with st.expander("Setup Counter"):
-            drawing_mode = st.selectbox(
-                "Drawing tool:",
-                ("line", "freedraw", "transform"),
-            )
-            success, image = cap.read()
-            canvas_result = st_canvas(
-                width=640,
-                height=height * 640 / width,
-                background_image=Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB)),
-                stroke_width=1,
-                drawing_mode=drawing_mode, key="canvas"
-            )
-
-            if canvas_result.json_data is not None:
-                objects = pd.json_normalize(canvas_result.json_data["objects"])
-                for col in objects.select_dtypes(include=["object"]).columns:
-                    objects[col] = objects[col].astype("str")
-                st.dataframe(objects)
-                for ind in objects.index:
-                    centroid = point(objects['left'][ind], objects['top'][ind])
-                    xoffset = objects['x1'][ind]
-                    yoffset = objects['y1'][ind]
-                    passing_object_counter_list.append(
-                        passing_object_counter.init_centroid(centroid, xoffset, yoffset, canvas_scale))
+        passing_counter = st_counter_setup_container(image, width, height)
+        if passing_counter.counters_table is not None:
+            for ind in passing_counter.counters_table.index:
+                centroid = point(passing_counter.counters_table['left'][ind], passing_counter.counters_table['top'][ind])
+                xoffset = passing_counter.counters_table['x1'][ind]
+                yoffset = passing_counter.counters_table['y1'][ind]
+                passing_object_counter_list.append(
+                    passing_object_counter.init_centroid(centroid, xoffset, yoffset, ind, passing_counter.display_scale))
 
         # size limited by streamlit cloud service
         if width > 1920 or height > 1080:
@@ -397,7 +437,8 @@ def video_object_detection(variables):
                         continue
                     detections = detector(frame)
                     # Update object localizer
-                    image, result = annotate_image(frame, detections, sort_tracker, progress(0))
+                    image, result = track_and_annotate_detections(frame, detections, sort_tracker,
+                                                                  passing_object_counter_list, progress(0))
                     process.stdin.write(cv2.cvtColor(image, cv2.COLOR_BGR2RGB).astype(np.uint8).tobytes())
                     result_list.append(result)
 
@@ -423,6 +464,8 @@ def video_object_detection(variables):
                                                            columns=Detection._fields),
                                  # .style.apply(color_row, axis=1), TODO: add color to df by row index
                                  use_container_width=True)
+                    with st.expander("Setup Counter"):
+                        passing_counter.counters_df_display.dataframe(format_counters_display(passing_counter.counters_table, passing_object_counter_list))
                 except ValueError as e:
                     'No tracking data found'
                     e
@@ -446,22 +489,28 @@ def live_object_detection(variables):
                          }]}
     )
 
-    # init frame counter, object detector and tracker
+    # init frame counter, object detector, tracker and passing object counter
     frame_counter = frame_counter_class()
     detector = model_init(style, confidence_threshold)
     sort_tracker = Sort(track_age, track_hits, iou_thres)
+
+    # Dump queue for real time detection result
+    result_queue = (queue.Queue())
+    frame_queue = (queue.Queue(maxsize = 1))
 
     # reading each frame of live stream and passing to backend processing
     def frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
         image = frame.to_ndarray(format="bgr24")
         detections = detector(image)
         counter = frame_counter
-        annotated_image, result = annotate_image(image, detections, sort_tracker, counter())
+        annotated_image, result = track_and_annotate_detections(image, detections, sort_tracker, counter())
         counter(1)
 
         # NOTE: This `recv` method is called in another thread,
         # so it must be thread-safe.
         result_queue.put(result)
+        if not frame_queue.full():
+            frame_queue.put(frame)
 
         return av.VideoFrame.from_ndarray(annotated_image, format="bgr24")
 
@@ -474,6 +523,9 @@ def live_object_detection(variables):
         async_processing=True,
     )
 
+    #image = frame_queue.get()
+    #passing_counter = st_counter_setup_container(image, image.width, image.height)
+        
     if st.checkbox("Show the detected labels", value=True):
         if webrtc_ctx.state.playing:
             labels_placeholder = st.empty()
