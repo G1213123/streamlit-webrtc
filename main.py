@@ -28,14 +28,15 @@ from streamlit_webrtc import (
 )
 from PIL import Image
 
-st.set_page_config(layout="wide")
-logger = logging.getLogger(__name__)
+st.set_page_config( layout="wide" )
+logger = logging.getLogger( __name__ )
 
 pd.options.display.float_format = '{:.2f}'.format
 
+
 @st.experimental_singleton
 def generate_label_colors():
-    return np.random.uniform(0, 255, size=(65536, 3))
+    return np.random.uniform( 0, 255, size=(65536, 3) )
 
 
 COLORS = generate_label_colors()
@@ -45,7 +46,7 @@ def color_row(s):
     return COLORS[s.name]
 
 
-class Detection(NamedTuple):
+class Detection( NamedTuple ):
     # Store detected object
     frame: int
     id: int
@@ -68,12 +69,14 @@ class frame_counter_class():
         self.frame += count
         return self.frame
 
+
 class st_counter_setup_container:
-    def __init__(self, image, width, height, screen_width = 640):
-        self.display_scale = width/screen_width
+    def __init__(self, image, width, height, screen_width=640):
+        self.display_scale = width / screen_width
         self.counters_df_display = None
         self.counters_table = None
-        with st.expander("Setup Counter"):
+        self.counters_num = 0
+        with st.expander( "Setup Counter" ):
             drawing_mode = st.selectbox(
                 "Drawing tool:",
                 ("line", "freedraw", "transform"),
@@ -81,29 +84,36 @@ class st_counter_setup_container:
             canvas_result = st_canvas(
                 width=screen_width,
                 height=height // self.display_scale,
-                background_image=Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB)),
+                background_image=Image.fromarray( cv2.cvtColor( image, cv2.COLOR_BGR2RGB ) ),
                 stroke_width=1,
                 drawing_mode=drawing_mode, key="canvas"
             )
 
             if canvas_result.json_data is not None:
-                if len(canvas_result.json_data['objects']) >0:
-                    counters_table = format_counters_display(pd.json_normalize(canvas_result.json_data['objects']))
-                    self.counters_df_display = st.dataframe(counters_table.style.set_precision(1))
+                if len( canvas_result.json_data['objects'] ) > 0:
+                    counters_table = format_counters_display( pd.json_normalize( canvas_result.json_data['objects'] ) )
+                    self.counters_df_display = st.dataframe( counters_table.style.set_precision( 1 ) )
                     self.counters_table = counters_table
+                    self.counters_num = len(counters_table.index)
 
+    def generate_counters(self):
+        for ind in range(self.counters_num):
+            centroid = point( self.counters_table['left'][ind], self.counters_table['top'][ind] )
+            xoffset = self.counters_table['x1'][ind]
+            yoffset = self.counters_table['y1'][ind]
+            yield passing_object_counter.init_centroid( centroid, xoffset, yoffset, ind, self.display_scale )
 
 
 class st_variables_container:
     # Container for the variable sliders listening user input
     def __init__(self):
         with st.container():
-            st.selectbox('Choose the [detection model](https://github.com/WongKinYiu/yolov7)',
-                         list(config.STYLES.keys()), key='model_style')
+            st.selectbox( 'Choose the [detection model](https://github.com/WongKinYiu/yolov7)',
+                          list( config.STYLES.keys() ), key='model_style' )
             st.slider(
                 "Confidence threshold", 0.0, 1.0, 0.5, 0.05, key='confidence_threshold'
             )
-            st.caption('[SORT](https://github.com/abewley/sort) Tracking Algorithm')
+            st.caption( '[SORT](https://github.com/abewley/sort) Tracking Algorithm' )
             st.slider(
                 "Tracking Age (frames)", 0, 20, 10, 1, key='track_age'
             )
@@ -153,17 +163,17 @@ class passing_object_counter():
     def __init__(self, vertices: List[point], id, scale: float = 1.0):
         self.vertices = [v * scale for v in vertices]
         self.count = 0
-        self.id = int(id)
+        self.id = int( id )
 
     @classmethod
     def init_centroid(cls, centroid, x_offset, y_offset, id, scale=1.0):
-        p1, p2 = copy.deepcopy(centroid), copy.deepcopy(centroid)
-        vertices = [p1 + point(x_offset, y_offset), p2 + point(-x_offset, -y_offset)]
-        return cls(vertices, id, scale)
+        p1, p2 = copy.deepcopy( centroid ), copy.deepcopy( centroid )
+        vertices = [p1 + point( x_offset, y_offset ), p2 + point( -x_offset, -y_offset )]
+        return cls( vertices, id, scale )
 
     def check_intersect(self, path_vertices: List[point]):
         A, B, C, D = self.vertices[0], self.vertices[1], path_vertices[0], path_vertices[1]
-        if ccw(A, C, D) != ccw(B, C, D) and ccw(A, B, C) != ccw(A, B, D):
+        if ccw( A, C, D ) != ccw( B, C, D ) and ccw( A, B, C ) != ccw( A, B, D ):
             self.count += 1
         return self.count
 
@@ -172,17 +182,17 @@ class passing_object_counter():
 def gcd(a, b):
     if b == 0:
         return a
-    return gcd(b, a % b)
+    return gcd( b, a % b )
 
 
 @st.experimental_memo
 def best_match_ratio(w, h, style_list):
-    diff = float('inf')
+    diff = float( 'inf' )
     match = ''
     for s in style_list:
-        s_h, s_w = list(map(int, s.split('_')[1].split('x')))
-        if abs(w / s_w - h / s_h) < diff:
-            diff = abs(w / s_w - h / s_h)
+        s_h, s_w = list( map( int, s.split( '_' )[1].split( 'x' ) ) )
+        if abs( w / s_w - h / s_h ) < diff:
+            diff = abs( w / s_w - h / s_h )
             match = s
     return match
 
@@ -200,40 +210,40 @@ def download_file(url, download_to: Path, expected_size=None):
             if download_to.stat().st_size == expected_size:
                 return
         else:
-            st.info(f"{url} is already downloaded.")
-            if not st.button("Download again?"):
+            st.info( f"{url} is already downloaded." )
+            if not st.button( "Download again?" ):
                 return
 
-    download_to.parent.mkdir(parents=True, exist_ok=True)
+    download_to.parent.mkdir( parents=True, exist_ok=True )
 
     # These are handles to two visual elements to animate.
     weights_warning, progress_bar = None, None
     try:
-        weights_warning = st.warning("Downloading %s..." % url)
-        progress_bar = st.progress(0)
+        weights_warning = st.warning( "Downloading %s..." % url )
+        progress_bar = st.progress( 0 )
 
-        with open(download_to, "wb") as output_file:
-            with urllib.request.urlopen(url) as response:
-                length = int(response.info()["Content-Length"])
+        with open( download_to, "wb" ) as output_file:
+            with urllib.request.urlopen( url ) as response:
+                length = int( response.info()["Content-Length"] )
                 counter = 0.0
                 MEGABYTES = 2.0 ** 20.0
                 while True:
-                    data = response.read(131072)
+                    data = response.read( 131072 )
                     if not data:
                         break
-                    counter += len(data)
-                    output_file.write(data)
+                    counter += len( data )
+                    output_file.write( data )
 
                     # We perform animation by overwriting the elements.
                     weights_warning.warning(
                         "Downloading %s... (%6.2f/%6.2f MB)"
                         % (url, counter / MEGABYTES, length / MEGABYTES)
                     )
-                    progress_bar.progress(min(counter / length, 1.0))
-        file = tarfile.open(name=output_file.name, mode="r|gz")
-        file.extractall(path=download_to.parent)
+                    progress_bar.progress( min( counter / length, 1.0 ) )
+        file = tarfile.open( name=output_file.name, mode="r|gz" )
+        file.extractall( path=download_to.parent )
         file.close()
-        os.remove(output_file.name)
+        os.remove( output_file.name )
     # Finally, we remove these visual elements by calling .empty().
     finally:
         if weights_warning is not None:
@@ -242,17 +252,17 @@ def download_file(url, download_to: Path, expected_size=None):
             progress_bar.empty()
 
 
-def format_counters_display(objects:pd.DataFrame, results=None):
+def format_counters_display(objects: pd.DataFrame, results=None):
     show_columns = ['type', 'left', 'top', 'x1', 'x2', 'y1', 'y2', 'width', 'height']
-    if len(objects.index) > 0:
+    if len( objects.index ) > 0:
         objects = objects[show_columns]
         # for col in objects.select_dtypes(include='float64').columns:
         #   objects.style.format({col: '{:,.2f}'.format})
-            #    objects[col] = objects[col].apply(lambda x: ('{:,.1f}'.format(x)).rstrip("0"))
+        #    objects[col] = objects[col].apply(lambda x: ('{:,.1f}'.format(x)).rstrip("0"))
 
     else:
         return None
-    if results is not None and len(results) == len(objects.index):
+    if results is not None and len( results ) == len( objects.index ):
         objects['count'] = [r.count for r in results]
 
     return objects
@@ -266,18 +276,18 @@ def model_init(model, confidence_threshold=0.5):
     """
 
     MODEL_LOCAL_PATH = config.MODEL_PATH / f'{config.STYLES[model]}.onnx'
-    if not Path(MODEL_LOCAL_PATH).exists():
-        download_file(config.MODEL_URL, Path(MODEL_LOCAL_PATH).parent / "resources.tar.gz",
-                      expected_size=1007618059)
+    if not Path( MODEL_LOCAL_PATH ).exists():
+        download_file( config.MODEL_URL, Path( MODEL_LOCAL_PATH ).parent / "resources.tar.gz",
+                       expected_size=1007618059 )
 
     # Session-specific caching
     cache_key = "object_detection_dnn"
     if cache_key in st.session_state:
         detector = st.session_state[cache_key]
     else:
-        detector = inference.init(model, conf_thres=confidence_threshold)
+        detector = inference.init( model, conf_thres=confidence_threshold )
         st.session_state[cache_key] = detector
-    print(st.session_state[cache_key])
+    print( st.session_state[cache_key] )
     return detector
 
 
@@ -287,22 +297,22 @@ def track_and_annotate_detections(image, detections, sort_tracker, passing_count
     result: List[Detection] = []
 
     if frame:
-        cv2.putText(image, f'frame:{frame}', (40, 40), cv2.FONT_HERSHEY_SIMPLEX,
-                    1, (240, 240, 240), 2)
+        cv2.putText( image, f'frame:{frame}', (40, 40), cv2.FONT_HERSHEY_SIMPLEX,
+                     1, (240, 240, 240), 2 )
 
     boxes, confidences, ids = detections
 
-    dets_to_sort = np.empty((0, 6))
+    dets_to_sort = np.empty( (0, 6) )
 
-    for box, confidence, idx in zip(boxes, confidences, ids):
-        (startX, startY, endX, endY) = box.astype("int")
+    for box, confidence, idx in zip( boxes, confidences, ids ):
+        (startX, startY, endX, endY) = box.astype( "int" )
 
         # NOTE: We send in detected object class too
-        dets_to_sort = np.vstack((dets_to_sort,
-                                  np.array([startX, startY, endX, endY, confidence, idx])))
+        dets_to_sort = np.vstack( (dets_to_sort,
+                                   np.array( [startX, startY, endX, endY, confidence, idx] )) )
 
     # Run SORT and get tracked objects
-    tracked_dets = sort_tracker.update(dets_to_sort)
+    tracked_dets = sort_tracker.update( dets_to_sort )
     tracks = sort_tracker.getTrackers()
 
     # loop over tracks
@@ -311,50 +321,52 @@ def track_and_annotate_detections(image, detections, sort_tracker, passing_count
         # draw colored tracks
 
         # update passing counter with the latest tracked objects path
-        if len(track.centroidarr) > 1:
-            track_last_path = [point(*track.centroidarr[-1]), point(*track.centroidarr[-2])]
+        if len( track.centroidarr ) > 1:
+            track_last_path = [point( *track.centroidarr[-1] ), point( *track.centroidarr[-2] )]
+
+        drawn_track = [cv2.line( image, (int( track.centroidarr[i][0] ),
+                                         int( track.centroidarr[i][1] )),
+                                 (int( track.centroidarr[i + 1][0] ),
+                                  int( track.centroidarr[i + 1][1] )),
+                                 COLORS[track.id + 1], thickness=2 )
+                       for i, _ in enumerate( track.centroidarr )
+                       if i < len( track.centroidarr ) - 1]
+
+        if passing_counters is not None:
             for p in passing_counters:
-                p.check_intersect(track_last_path)
-
-        drawn_track = [cv2.line(image, (int(track.centroidarr[i][0]),
-                                        int(track.centroidarr[i][1])),
-                                (int(track.centroidarr[i + 1][0]),
-                                 int(track.centroidarr[i + 1][1])),
-                                COLORS[track.id + 1], thickness=2)
-                       for i, _ in enumerate(track.centroidarr)
-                       if i < len(track.centroidarr) - 1]
-
-        for p in passing_counters:
-            cv2.line(image, tuple(map(int,p.vertices[0])), tuple(map(int,p.vertices[1])),
-                     COLORS[p.id], thickness=2)
-            label = f'Counter[{p.id}]: {p.count}'
-            cv2.putText(image, label, tuple(map(int,copy.deepcopy(p.vertices[0]) + point(5,5))), cv2.FONT_HERSHEY_SIMPLEX,
-                        1, COLORS[p.id], 2)
+                if len( track.centroidarr ) > 1:
+                    p.check_intersect( track_last_path )
+                cv2.line( image, tuple( map( int, p.vertices[0] ) ), tuple( map( int, p.vertices[1] ) ),
+                          COLORS[p.id], thickness=2 )
+                label = f'Counter[{p.id}]: {p.count}'
+                cv2.putText( image, label, tuple( map( int, copy.deepcopy( p.vertices[0] ) + point( 5, 5 ) ) ),
+                             cv2.FONT_HERSHEY_SIMPLEX,
+                             1, COLORS[p.id], 2 )
 
     # draw boxes for visualization
-    if len(tracked_dets) > 0:
+    if len( tracked_dets ) > 0:
         bbox_xyxy = tracked_dets[:, :4]
         identities = tracked_dets[:, 9]
         conf = tracked_dets[:, 5]
         categories = tracked_dets[:, 4]
 
-        for i, box in enumerate(bbox_xyxy):
-            x1, y1, x2, y2 = [int(i) for i in box]
-            cat = int(categories[i]) if categories is not None else 0
-            id = int(identities[i]) if identities is not None else 0
-            data = (int((box[0] + box[2]) / 2), (int((box[1] + box[3]) / 2)))
-            label = str(id) + ":" + class_names[cat] + "-" + "%.2f" % conf[i]
-            (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 1, 2)
-            cv2.rectangle(image, (x1, y1), (x2, y2), COLORS[id], 2)
+        for i, box in enumerate( bbox_xyxy ):
+            x1, y1, x2, y2 = [int( i ) for i in box]
+            cat = int( categories[i] ) if categories is not None else 0
+            id = int( identities[i] ) if identities is not None else 0
+            data = (int( (box[0] + box[2]) / 2 ), (int( (box[1] + box[3]) / 2 )))
+            label = str( id ) + ":" + class_names[cat] + "-" + "%.2f" % conf[i]
+            (w, h), _ = cv2.getTextSize( label, cv2.FONT_HERSHEY_SIMPLEX, 1, 2 )
+            cv2.rectangle( image, (x1, y1), (x2, y2), COLORS[id], 2 )
             # cv2.rectangle( image, (x1, y1 - 20), (x1 + w, y1), COLORS[track.id], -1 )
-            cv2.putText(image, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX,
-                        1, COLORS[id], 2)
+            cv2.putText( image, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX,
+                         1, COLORS[id], 2 )
             # cv2.circle(img, data, 6, color,-1)   #centroid of box
 
-            result.append(Detection(frame=frame if frame is not None else 0, id=id, type=class_names[cat],
-                                    prob=float(conf[i]), xmin=box[0],
-                                    ymin=box[1], xmax=box[2], ymax=box[3], xmid=box[0] + (box[2] * 0.5),
-                                    ymid=box[1] + (box[3] * 0.5)))
+            result.append( Detection( frame=frame if frame is not None else 0, id=id, type=class_names[cat],
+                                      prob=float( conf[i] ), xmin=box[0],
+                                      ymin=box[1], xmax=box[2], ymax=box[3], xmid=box[0] + (box[2] * 0.5),
+                                      ymid=box[1] + (box[3] * 0.5) ) )
 
     return image, result
 
@@ -372,79 +384,73 @@ def video_object_detection(variables):
     result_list = []
     passing_object_counter_list = []
 
-    file = st.file_uploader('Choose a video', type=['avi', 'mp4', 'mov'])
+    file = st.file_uploader( 'Choose a video', type=['avi', 'mp4', 'mov'] )
     if file is not None:
         # save the uploaded file to a temporary location
-        tfile = tempfile.NamedTemporaryFile(delete=True)
-        tfile.write(file.read())
-        cap = cv2.VideoCapture(tfile.name)
+        tfile = tempfile.NamedTemporaryFile( delete=True )
+        tfile.write( file.read() )
+        cap = cv2.VideoCapture( tfile.name )
         tfile.close()
 
-        width, height = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frame = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        width, height = int( cap.get( cv2.CAP_PROP_FRAME_WIDTH ) ), int( cap.get( cv2.CAP_PROP_FRAME_HEIGHT ) )
+        fps = cap.get( cv2.CAP_PROP_FPS )
+        total_frame = int( cap.get( cv2.CAP_PROP_FRAME_COUNT ) )
         success, image = cap.read()
 
-        passing_counter = st_counter_setup_container(image, width, height)
-        if passing_counter.counters_table is not None:
-            for ind in passing_counter.counters_table.index:
-                centroid = point(passing_counter.counters_table['left'][ind], passing_counter.counters_table['top'][ind])
-                xoffset = passing_counter.counters_table['x1'][ind]
-                yoffset = passing_counter.counters_table['y1'][ind]
-                passing_object_counter_list.append(
-                    passing_object_counter.init_centroid(centroid, xoffset, yoffset, ind, passing_counter.display_scale))
+        passing_counter = st_counter_setup_container( image, width, height )
+        passing_object_counter_list=list(passing_counter.generate_counters())
 
         # size limited by streamlit cloud service
         if width > 1920 or height > 1080:
-            st.warning(f"File resolution [{width}x{height}] exceeded limit [1920x1080], "
-                       f"please consider scale down the video", icon="⚠️")
+            st.warning( f"File resolution [{width}x{height}] exceeded limit [1920x1080], "
+                        f"please consider scale down the video", icon="⚠️" )
         else:
-            gcd_wh = gcd(width, height)
-            st.info(f"Uploaded video has aspect ratio of [{width // gcd_wh}:{height // gcd_wh}], "
-                    f"best detection with model {best_match_ratio(width, height, config.STYLES)}"
-                    )
-            if st.button('Detect'):
-                progress_txt = st.caption(f'Analysing Video: 0 out of {total_frame} frames')
-                progress_bar = st.progress(0)
+            gcd_wh = gcd( width, height )
+            st.info( f"Uploaded video has aspect ratio of [{width // gcd_wh}:{height // gcd_wh}], "
+                     f"best detection with model {best_match_ratio( width, height, config.STYLES )}"
+                     )
+            if st.button( 'Detect' ):
+                progress_txt = st.caption( f'Analysing Video: 0 out of {total_frame} frames' )
+                progress_bar = st.progress( 0 )
                 progress = frame_counter_class()
                 # temp dir for saving the video to be processed by opencv
-                if not os.path.exists(os.path.join(config.HERE, 'storage')):
-                    os.makedirs(os.path.join(config.HERE, 'storage'))
-                output_path = os.path.join(config.HERE, f"storage\\{str(uuid.uuid4())}.mp4")
+                if not os.path.exists( os.path.join( config.HERE, 'storage' ) ):
+                    os.makedirs( os.path.join( config.HERE, 'storage' ) )
+                output_path = os.path.join( config.HERE, f"storage\\{str( uuid.uuid4() )}.mp4" )
 
                 # encode cv2 output into h264
                 # https://stackoverflow.com/questions/30509573/writing-an-mp4-video-using-python-opencv
                 args = (ffmpeg
-                        .input('pipe:', format='rawvideo', pix_fmt='rgb24', s='{}x{}'.format(width, height))
-                        .output(output_path, pix_fmt='yuv420p', vcodec='libx264', r=fps, crf=37)
+                        .input( 'pipe:', format='rawvideo', pix_fmt='rgb24', s='{}x{}'.format( width, height ) )
+                        .output( output_path, pix_fmt='yuv420p', vcodec='libx264', r=fps, crf=37 )
                         .overwrite_output()
                         .get_args()
                         )
                 # check if deployed at cloud or local host
                 ffmpeg_source = config.FFMPEG_PATH if platform.processor() else 'ffmpeg'
-                process = subprocess.Popen([ffmpeg_source] + args, stdin=subprocess.PIPE)
+                process = subprocess.Popen( [ffmpeg_source] + args, stdin=subprocess.PIPE )
 
                 # init object detector and tracker
-                detector = model_init(style, confidence_threshold)
-                sort_tracker = Sort(track_age, track_hits, iou_thres)
+                detector = model_init( style, confidence_threshold )
+                sort_tracker = Sort( track_age, track_hits, iou_thres )
                 while cap.isOpened():
                     try:
                         ret, frame = cap.read()
                         if not ret:
                             break
                     except Exception as e:
-                        print(e)
+                        print( e )
                         continue
-                    detections = detector(frame)
+                    detections = detector( frame )
                     # Update object localizer
-                    image, result = track_and_annotate_detections(frame, detections, sort_tracker,
-                                                                  passing_object_counter_list, progress(0))
-                    process.stdin.write(cv2.cvtColor(image, cv2.COLOR_BGR2RGB).astype(np.uint8).tobytes())
-                    result_list.append(result)
+                    image, result = track_and_annotate_detections( frame, detections, sort_tracker,
+                                                                   passing_object_counter_list, progress( 0 ) )
+                    process.stdin.write( cv2.cvtColor( image, cv2.COLOR_BGR2RGB ).astype( np.uint8 ).tobytes() )
+                    result_list.append( result )
 
                     # progress of analysis
-                    progress_bar.progress(progress(1) / total_frame)
-                    progress_txt.caption(f'Analysing Video: {progress(0)} out of {total_frame} frames')
+                    progress_bar.progress( progress( 1 ) / total_frame )
+                    progress_txt.caption( f'Analysing Video: {progress( 0 )} out of {total_frame} frames' )
 
                 process.stdin.close()
                 process.wait()
@@ -452,20 +458,21 @@ def video_object_detection(variables):
                 cap.release()
                 tfile.close()
 
-                st.video(output_path)
-                os.remove(output_path)
+                st.video( output_path )
+                os.remove( output_path )
 
-                progress_bar.progress(100)
+                progress_bar.progress( 100 )
                 progress_txt.empty()
 
                 # Dumping analysis result into table
                 try:
-                    st.dataframe(pd.DataFrame.from_records([item for sublist in result_list for item in sublist],
-                                                           columns=Detection._fields),
-                                 # .style.apply(color_row, axis=1), TODO: add color to df by row index
-                                 use_container_width=True)
-                    with st.expander("Setup Counter"):
-                        passing_counter.counters_df_display.dataframe(format_counters_display(passing_counter.counters_table, passing_object_counter_list))
+                    st.dataframe( pd.DataFrame.from_records( [item for sublist in result_list for item in sublist],
+                                                             columns=Detection._fields ),
+                                  # .style.apply(color_row, axis=1), TODO: add color to df by row index
+                                  use_container_width=True )
+                    with st.expander( "Setup Counter" ):
+                        passing_counter.counters_df_display.dataframe(
+                            format_counters_display( passing_counter.counters_table, passing_object_counter_list ) )
                 except ValueError as e:
                     'No tracking data found'
                     e
@@ -491,28 +498,31 @@ def live_object_detection(variables):
 
     # init frame counter, object detector, tracker and passing object counter
     frame_counter = frame_counter_class()
-    detector = model_init(style, confidence_threshold)
-    sort_tracker = Sort(track_age, track_hits, iou_thres)
+    detector = model_init( style, confidence_threshold )
+    sort_tracker = Sort( track_age, track_hits, iou_thres )
+    counter_setup_container = None
+    passing_object_counters = None
 
     # Dump queue for real time detection result
     result_queue = (queue.Queue())
-    frame_queue = (queue.Queue(maxsize = 1))
+    frame_queue = (queue.Queue( maxsize=1 ))
 
     # reading each frame of live stream and passing to backend processing
     def frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
-        image = frame.to_ndarray(format="bgr24")
-        detections = detector(image)
+        image = frame.to_ndarray( format="bgr24" )
+        detections = detector( image )
         counter = frame_counter
-        annotated_image, result = track_and_annotate_detections(image, detections, sort_tracker, counter())
-        counter(1)
+        annotated_image, result = track_and_annotate_detections( image, detections, sort_tracker, passing_object_counters,
+                                                                 counter() )
+        counter( 1 )
 
         # NOTE: This `recv` method is called in another thread,
         # so it must be thread-safe.
-        result_queue.put(result)
+        result_queue.put( result )
         if not frame_queue.full():
-            frame_queue.put(frame)
+            frame_queue.put( image )
 
-        return av.VideoFrame.from_ndarray(annotated_image, format="bgr24")
+        return av.VideoFrame.from_ndarray( annotated_image, format="bgr24" )
 
     webrtc_ctx = webrtc_streamer(
         key="object-detection",
@@ -523,13 +533,19 @@ def live_object_detection(variables):
         async_processing=True,
     )
 
-    #image = frame_queue.get()
-    #passing_counter = st_counter_setup_container(image, image.width, image.height)
-        
-    if st.checkbox("Show the detected labels", value=True):
+    # capture image for the counter setup container
+    if webrtc_ctx.state.playing:
+        image = frame_queue.get()
+        if counter_setup_container is None:
+            counter_setup_container = st_counter_setup_container( image, image.shape[1], image.shape[0] )
+    try:
+        passing_object_counters = list(counter_setup_container.generate_counters())
+    except:
+        passing_object_counters = None
+
+    if st.checkbox( "Show the detected labels", value=True ):
         if webrtc_ctx.state.playing:
             labels_placeholder = st.empty()
-            track_placeholder = st.empty()
             # NOTE: The video transformation with object detection and
             # this loop displaying the result labels are running
             # in different threads asynchronously.
@@ -537,14 +553,14 @@ def live_object_detection(variables):
             # are not strictly synchronized.
             while True:
                 try:
-                    result = result_queue.get(timeout=1.0)
+                    result = result_queue.get( timeout=1.0 )
                 except queue.Empty:
                     result = None
-                labels_placeholder.dataframe(result)
+                labels_placeholder.dataframe( result )
 
 
 def main():
-    st.header("Object Detecting and Tracking demo")
+    st.header( "Object Detecting and Tracking demo" )
 
     pages = {
         "Real time object detection (sendrecv)": live_object_detection,
@@ -559,10 +575,10 @@ def main():
     )
     with my_sidebar:
         variables = st_variables_container()
-    st.subheader(page_title)
+    st.subheader( page_title )
 
     page_func = pages[page_title]
-    page_func(variables)
+    page_func( variables )
 
     # logger.debug( "=== Alive threads ===" )
     # for thread in threading.enumerate():
@@ -581,12 +597,12 @@ if __name__ == "__main__":
         force=True,
     )
 
-    logger.setLevel(level=logging.DEBUG if DEBUG else logging.INFO)
+    logger.setLevel( level=logging.DEBUG if DEBUG else logging.INFO )
 
-    st_webrtc_logger = logging.getLogger("streamlit_webrtc")
-    st_webrtc_logger.setLevel(logging.DEBUG)
+    st_webrtc_logger = logging.getLogger( "streamlit_webrtc" )
+    st_webrtc_logger.setLevel( logging.DEBUG )
 
-    fsevents_logger = logging.getLogger("fsevents")
-    fsevents_logger.setLevel(logging.WARNING)
+    fsevents_logger = logging.getLogger( "fsevents" )
+    fsevents_logger.setLevel( logging.WARNING )
 
     main()
