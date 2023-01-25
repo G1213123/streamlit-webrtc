@@ -31,9 +31,6 @@ from PIL import Image
 st.set_page_config( layout="wide" )
 logger = logging.getLogger( __name__ )
 
-pd.options.display.float_format = '{:.2f}'.format
-
-
 @st.experimental_singleton
 def generate_label_colors():
     return np.random.uniform( 0, 255, size=(65536, 3) )
@@ -75,33 +72,62 @@ class st_counter_setup_container:
         self.display_scale = width / screen_width
         self.counters_df_display = None
         self.counters_table = None
+        self.counters = []
         self.counters_num = 0
-        with st.expander( "Setup Counter" ):
-            drawing_mode = st.selectbox(
-                "Drawing tool:",
-                ("line", "freedraw", "transform"),
-            )
+        self.wrapper = st.expander( "Setup Counter" )
+        self.option = 'Empty'
+        with self.wrapper:
             canvas_result = st_canvas(
                 width=screen_width,
                 height=height // self.display_scale,
                 background_image=Image.fromarray( cv2.cvtColor( image, cv2.COLOR_BGR2RGB ) ),
                 stroke_width=1,
-                drawing_mode=drawing_mode, key="canvas"
+                drawing_mode='line', key="canvas"
             )
 
             if canvas_result.json_data is not None:
                 if len( canvas_result.json_data['objects'] ) > 0:
-                    counters_table = format_counters_display( pd.json_normalize( canvas_result.json_data['objects'] ) )
-                    self.counters_df_display = st.dataframe( counters_table.style.set_precision( 1 ) )
-                    self.counters_table = counters_table
-                    self.counters_num = len(counters_table.index)
+                    self.canvas_result = canvas_result.json_data['objects']
+                    self.format_counters_display()
+                    self.counters_df_display = st.dataframe( self.counters_table.style.set_precision( 1 ) )
 
     def generate_counters(self):
-        for ind in range(self.counters_num):
+        for ind in range( self.counters_num ):
             centroid = point( self.counters_table['left'][ind], self.counters_table['top'][ind] )
             xoffset = self.counters_table['x1'][ind]
             yoffset = self.counters_table['y1'][ind]
-            yield passing_object_counter.init_centroid( centroid, xoffset, yoffset, ind, self.display_scale )
+            counter = passing_object_counter.init_centroid( centroid, xoffset, yoffset, ind, self.display_scale )
+            self.counters.append( counter )
+            yield counter
+
+    def counter_results_select(self):
+        if len( self.counters ) > 0:
+            if 'index' not in st.session_state:
+                st.session_state.counter_option_index = 0
+            if 'counter_result_options' not in st.session_state:
+                st.session_state.counter_result_options = [d.id for d in self.counters]
+            with self.wrapper:
+                if st.session_state.counter_option_index == 0:
+                    st.session_state.counter_option_index = st.selectbox(
+                        'Counter Result',
+                        options=st.session_state.counter_result_options,
+                    )
+                    selected_counter = [x for x in self.counters if x.id == st.session_state.counter_result_options[st.session_state.counter_option_index]][0]
+                    st.table( pd.DataFrame( selected_counter.counted_objects ) )
+
+    def format_counters_display(self, results=None):
+        self.counters_table=pd.json_normalize( self.canvas_result )
+        show_columns = ['type', 'left', 'top', 'x1', 'x2', 'y1', 'y2', 'width', 'height']
+        self.counters_num = len( self.counters_table.index )
+        if self.counters_table is not None:
+            self.counters_table = self.counters_table[show_columns]
+            #self.counters_table.style.format(precision=1)
+        else:
+            return None
+        if results is not None and len( results ) == len( self.counters_table.index ):
+            self.counters_table['count'] = [r.count for r in results]
+
+        return self.counters_table
 
 
 class st_variables_container:
@@ -163,6 +189,7 @@ class passing_object_counter():
     def __init__(self, vertices: List[point], id, scale: float = 1.0):
         self.vertices = [v * scale for v in vertices]
         self.count = 0
+        self.counted_objects = []
         self.id = int( id )
 
     @classmethod
@@ -171,10 +198,11 @@ class passing_object_counter():
         vertices = [p1 + point( x_offset, y_offset ), p2 + point( -x_offset, -y_offset )]
         return cls( vertices, id, scale )
 
-    def check_intersect(self, path_vertices: List[point]):
+    def check_intersect(self, path_vertices: List[point], object):
         A, B, C, D = self.vertices[0], self.vertices[1], path_vertices[0], path_vertices[1]
         if ccw( A, C, D ) != ccw( B, C, D ) and ccw( A, B, C ) != ccw( A, B, D ):
             self.count += 1
+            self.counted_objects.append( object )
         return self.count
 
 
@@ -252,22 +280,6 @@ def download_file(url, download_to: Path, expected_size=None):
             progress_bar.empty()
 
 
-def format_counters_display(objects: pd.DataFrame, results=None):
-    show_columns = ['type', 'left', 'top', 'x1', 'x2', 'y1', 'y2', 'width', 'height']
-    if len( objects.index ) > 0:
-        objects = objects[show_columns]
-        # for col in objects.select_dtypes(include='float64').columns:
-        #   objects.style.format({col: '{:,.2f}'.format})
-        #    objects[col] = objects[col].apply(lambda x: ('{:,.1f}'.format(x)).rstrip("0"))
-
-    else:
-        return None
-    if results is not None and len( results ) == len( objects.index ):
-        objects['count'] = [r.count for r in results]
-
-    return objects
-
-
 @st.experimental_singleton
 def model_init(model, confidence_threshold=0.5):
     """Object detection demo with YOLO v7.
@@ -317,10 +329,7 @@ def track_and_annotate_detections(image, detections, sort_tracker, passing_count
 
     # loop over tracks
     for track in tracks:
-        # color = compute_color_for_labels(id)
         # draw colored tracks
-
-        # update passing counter with the latest tracked objects path
         if len( track.centroidarr ) > 1:
             track_last_path = [point( *track.centroidarr[-1] ), point( *track.centroidarr[-2] )]
 
@@ -332,41 +341,36 @@ def track_and_annotate_detections(image, detections, sort_tracker, passing_count
                        for i, _ in enumerate( track.centroidarr )
                        if i < len( track.centroidarr ) - 1]
 
+        # draw boxes for visualization
+        bbox_xyxy = track.bbox_history[-1][:4]
+        identities = track.id + 1
+        conf = track.conf
+        categories = int( track.detclass )
+        x1, y1, x2, y2 = [int( i ) for i in bbox_xyxy]
+        label = str( identities ) + ":" + class_names[categories] + "-" + "%.2f" % conf
+        cv2.rectangle( image, (x1, y1), (x2, y2), COLORS[identities], 2 )
+        cv2.putText( image, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX,
+                     1, COLORS[identities], 2 )
+
+        # dump the tracked object to the result queue
+        detected_obj = Detection( frame=frame if frame is not None else 0, id=identities, type=class_names[categories],
+                                  prob=float( conf ), xmin=bbox_xyxy[0],
+                                  ymin=bbox_xyxy[1], xmax=bbox_xyxy[2], ymax=bbox_xyxy[3],
+                                  xmid=bbox_xyxy[0] + (bbox_xyxy[2] * 0.5),
+                                  ymid=bbox_xyxy[1] + (bbox_xyxy[3] * 0.5) )
+        result.append( detected_obj )
+
+        # update passing counter with the latest tracked objects path
         if passing_counters is not None:
             for p in passing_counters:
                 if len( track.centroidarr ) > 1:
-                    p.check_intersect( track_last_path )
+                    p.check_intersect( track_last_path, detected_obj )
                 cv2.line( image, tuple( map( int, p.vertices[0] ) ), tuple( map( int, p.vertices[1] ) ),
                           COLORS[p.id], thickness=2 )
-                label = f'Counter[{p.id}]: {p.count}'
+                label = f'Counter_{p.id}: {p.count}'
                 cv2.putText( image, label, tuple( map( int, copy.deepcopy( p.vertices[0] ) + point( 5, 5 ) ) ),
                              cv2.FONT_HERSHEY_SIMPLEX,
                              1, COLORS[p.id], 2 )
-
-    # draw boxes for visualization
-    if len( tracked_dets ) > 0:
-        bbox_xyxy = tracked_dets[:, :4]
-        identities = tracked_dets[:, 9]
-        conf = tracked_dets[:, 5]
-        categories = tracked_dets[:, 4]
-
-        for i, box in enumerate( bbox_xyxy ):
-            x1, y1, x2, y2 = [int( i ) for i in box]
-            cat = int( categories[i] ) if categories is not None else 0
-            id = int( identities[i] ) if identities is not None else 0
-            data = (int( (box[0] + box[2]) / 2 ), (int( (box[1] + box[3]) / 2 )))
-            label = str( id ) + ":" + class_names[cat] + "-" + "%.2f" % conf[i]
-            (w, h), _ = cv2.getTextSize( label, cv2.FONT_HERSHEY_SIMPLEX, 1, 2 )
-            cv2.rectangle( image, (x1, y1), (x2, y2), COLORS[id], 2 )
-            # cv2.rectangle( image, (x1, y1 - 20), (x1 + w, y1), COLORS[track.id], -1 )
-            cv2.putText( image, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX,
-                         1, COLORS[id], 2 )
-            # cv2.circle(img, data, 6, color,-1)   #centroid of box
-
-            result.append( Detection( frame=frame if frame is not None else 0, id=id, type=class_names[cat],
-                                      prob=float( conf[i] ), xmin=box[0],
-                                      ymin=box[1], xmax=box[2], ymax=box[3], xmid=box[0] + (box[2] * 0.5),
-                                      ymid=box[1] + (box[3] * 0.5) ) )
 
     return image, result
 
@@ -381,7 +385,9 @@ def video_object_detection(variables):
 
     style, confidence_threshold, track_age, track_hits, iou_thres = variables.get_var()
 
-    result_list = []
+    if 'detect' not in st.session_state:
+        st.session_state.detect = False
+    st.session_state['result_list'] = []
     passing_object_counter_list = []
 
     file = st.file_uploader( 'Choose a video', type=['avi', 'mp4', 'mov'] )
@@ -398,7 +404,7 @@ def video_object_detection(variables):
         success, image = cap.read()
 
         passing_counter = st_counter_setup_container( image, width, height )
-        passing_object_counter_list=list(passing_counter.generate_counters())
+        passing_object_counter_list = list( passing_counter.generate_counters() )
 
         # size limited by streamlit cloud service
         if width > 1920 or height > 1080:
@@ -409,7 +415,9 @@ def video_object_detection(variables):
             st.info( f"Uploaded video has aspect ratio of [{width // gcd_wh}:{height // gcd_wh}], "
                      f"best detection with model {best_match_ratio( width, height, config.STYLES )}"
                      )
-            if st.button( 'Detect' ):
+            detect = st.button('Detect')
+            if detect or st.session_state.detect:
+                st.session_state.detect=True
                 progress_txt = st.caption( f'Analysing Video: 0 out of {total_frame} frames' )
                 progress_bar = st.progress( 0 )
                 progress = frame_counter_class()
@@ -446,7 +454,7 @@ def video_object_detection(variables):
                     image, result = track_and_annotate_detections( frame, detections, sort_tracker,
                                                                    passing_object_counter_list, progress( 0 ) )
                     process.stdin.write( cv2.cvtColor( image, cv2.COLOR_BGR2RGB ).astype( np.uint8 ).tobytes() )
-                    result_list.append( result )
+                    st.session_state['result_list'].append( result )
 
                     # progress of analysis
                     progress_bar.progress( progress( 1 ) / total_frame )
@@ -458,7 +466,7 @@ def video_object_detection(variables):
                 cap.release()
                 tfile.close()
 
-                st.video( output_path )
+                st.video( output_path)
                 os.remove( output_path )
 
                 progress_bar.progress( 100 )
@@ -466,16 +474,17 @@ def video_object_detection(variables):
 
                 # Dumping analysis result into table
                 try:
-                    st.dataframe( pd.DataFrame.from_records( [item for sublist in result_list for item in sublist],
+                    st.dataframe( pd.DataFrame.from_records( [item for sublist in st.session_state['result_list'] for item in sublist],
                                                              columns=Detection._fields ),
                                   # .style.apply(color_row, axis=1), TODO: add color to df by row index
                                   use_container_width=True )
-                    with st.expander( "Setup Counter" ):
-                        passing_counter.counters_df_display.dataframe(
-                            format_counters_display( passing_counter.counters_table, passing_object_counter_list ) )
+
                 except ValueError as e:
                     'No tracking data found'
                     e
+                passing_counter.counters_df_display.dataframe(
+                    passing_counter.format_counters_display( passing_object_counter_list ) )
+                passing_counter.counter_results_select()
 
 
 def live_object_detection(variables):
@@ -486,14 +495,16 @@ def live_object_detection(variables):
 
     # public-stun-list.txt
     # https://gist.github.com/mondain/b0ec1cf5f60ae726202e
-    # private turn server
+    # turn server
     # https://www.metered.ca/tools/openrelay/
+    turn_server = {"urls": st.secrets['URL'],
+                   "username": st.secrets['USERNAME'],
+                   "credential": st.secrets['CREDENTIAL'],
+                   } if st.secrets['URL'] is not None else None
     RTC_CONFIGURATION = RTCConfiguration(
-        {"iceServers": [{"url": "stun:stun.l.google.com:19302"},
-                        {"urls": st.secrets['URL'],
-                         "username": st.secrets['USERNAME'],
-                         "credential": st.secrets['CREDENTIAL'],
-                         }]}
+        {"iceServers": [{"url": "stun:stun3.l.google.com:19302"},
+                        {"url": "stun:stun.l.google.com:19302"},
+                        turn_server]}
     )
 
     # init frame counter, object detector, tracker and passing object counter
@@ -512,7 +523,8 @@ def live_object_detection(variables):
         image = frame.to_ndarray( format="bgr24" )
         detections = detector( image )
         counter = frame_counter
-        annotated_image, result = track_and_annotate_detections( image, detections, sort_tracker, passing_object_counters,
+        annotated_image, result = track_and_annotate_detections( image, detections, sort_tracker,
+                                                                 passing_object_counters,
                                                                  counter() )
         counter( 1 )
 
@@ -539,7 +551,7 @@ def live_object_detection(variables):
         if counter_setup_container is None:
             counter_setup_container = st_counter_setup_container( image, image.shape[1], image.shape[0] )
     try:
-        passing_object_counters = list(counter_setup_container.generate_counters())
+        passing_object_counters = list( counter_setup_container.generate_counters() )
     except:
         passing_object_counters = None
 
