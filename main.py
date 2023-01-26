@@ -31,6 +31,7 @@ from PIL import Image
 st.set_page_config( layout="wide" )
 logger = logging.getLogger( __name__ )
 
+
 @st.experimental_singleton
 def generate_label_colors():
     return np.random.uniform( 0, 255, size=(65536, 3) )
@@ -76,6 +77,7 @@ class st_counter_setup_container:
         self.counters_num = 0
         self.wrapper = st.expander( "Setup Counter" )
         self.option = 'Empty'
+        self.counter_result_display = None
         with self.wrapper:
             canvas_result = st_canvas(
                 width=screen_width,
@@ -89,7 +91,8 @@ class st_counter_setup_container:
                 if len( canvas_result.json_data['objects'] ) > 0:
                     self.canvas_result = canvas_result.json_data['objects']
                     self.format_counters_display()
-                    self.counters_df_display = st.dataframe( self.counters_table.style.set_precision( 1 ) )
+                    st.caption('Screenline Counters')
+                    self.counters_df_display = st.dataframe( self.counters_table.style.format( precision=1 ) )
 
     def generate_counters(self):
         for ind in range( self.counters_num ):
@@ -100,33 +103,37 @@ class st_counter_setup_container:
             self.counters.append( counter )
             yield counter
 
-    def counter_results_select(self):
+    def show_counter_results(self):
         if len( self.counters ) > 0:
             if 'index' not in st.session_state:
                 st.session_state.counter_option_index = 0
             if 'counter_result_options' not in st.session_state:
                 st.session_state.counter_result_options = [d.id for d in self.counters]
             with self.wrapper:
-                if st.session_state.counter_option_index == 0:
-                    st.session_state.counter_option_index = st.selectbox(
-                        'Counter Result',
-                        options=st.session_state.counter_result_options,
-                    )
-                    selected_counter = [x for x in self.counters if x.id == st.session_state.counter_result_options[st.session_state.counter_option_index]][0]
-                    st.table( pd.DataFrame( selected_counter.counted_objects ) )
+                # if st.session_state.counter_option_index == 0:
+                #     st.session_state.counter_option_index = st.selectbox(
+                #         'Counter Result',
+                #         options=st.session_state.counter_result_options,
+                #     )
+                #     selected_counter = [x for x in self.counters if x.id == st.session_state.counter_result_options[
+                #         st.session_state.counter_option_index]][0]
+                if self.counter_result_display is not None:
+                    self.counter_result_display.dataframe( pd.DataFrame( [x.counted_objects for x in self.counters], index=[f'Counter_{i.id}' for i in self.counters] ).transpose() )
+                else:
+                    st.caption( 'Screenline Counters Result' )
+                    self.counter_result_display = st.dataframe( pd.DataFrame( [x.counted_objects for x in self.counters], index=[f'Counter_{i.id}' for i in self.counters] ).transpose() )
 
     def format_counters_display(self, results=None):
-        self.counters_table=pd.json_normalize( self.canvas_result )
+        self.counters_table = pd.json_normalize( self.canvas_result )
         show_columns = ['type', 'left', 'top', 'x1', 'x2', 'y1', 'y2', 'width', 'height']
         self.counters_num = len( self.counters_table.index )
         if self.counters_table is not None:
             self.counters_table = self.counters_table[show_columns]
-            #self.counters_table.style.format(precision=1)
+            # self.counters_table.style.format(precision=1)
         else:
             return None
         if results is not None and len( results ) == len( self.counters_table.index ):
             self.counters_table['count'] = [r.count for r in results]
-
         return self.counters_table
 
 
@@ -385,9 +392,8 @@ def video_object_detection(variables):
 
     style, confidence_threshold, track_age, track_hits, iou_thres = variables.get_var()
 
-    if 'detect' not in st.session_state:
-        st.session_state.detect = False
-    st.session_state['result_list'] = []
+    if 'result_list' not in st.session_state:
+        st.session_state.result_list = []
     passing_object_counter_list = []
 
     file = st.file_uploader( 'Choose a video', type=['avi', 'mp4', 'mov'] )
@@ -415,12 +421,12 @@ def video_object_detection(variables):
             st.info( f"Uploaded video has aspect ratio of [{width // gcd_wh}:{height // gcd_wh}], "
                      f"best detection with model {best_match_ratio( width, height, config.STYLES )}"
                      )
-            detect = st.button('Detect')
-            if detect or st.session_state.detect:
-                st.session_state.detect=True
+            detect = st.button( 'Detect' )
+            if detect:
                 progress_txt = st.caption( f'Analysing Video: 0 out of {total_frame} frames' )
                 progress_bar = st.progress( 0 )
                 progress = frame_counter_class()
+                st.session_state.result_list = []
                 # temp dir for saving the video to be processed by opencv
                 if not os.path.exists( os.path.join( config.HERE, 'storage' ) ):
                     os.makedirs( os.path.join( config.HERE, 'storage' ) )
@@ -483,8 +489,8 @@ def video_object_detection(variables):
                     'No tracking data found'
                     e
                 passing_counter.counters_df_display.dataframe(
-                    passing_counter.format_counters_display( passing_object_counter_list ) )
-                passing_counter.counter_results_select()
+                    passing_counter.format_counters_display( passing_object_counter_list ).style.format( precision=1 ) )
+                passing_counter.show_counter_results()
 
 
 def live_object_detection(variables):
@@ -569,6 +575,9 @@ def live_object_detection(variables):
                 except queue.Empty:
                     result = None
                 labels_placeholder.dataframe( result )
+
+                if counter_setup_container is not None:
+                    counter_setup_container.show_counter_results()
 
 
 def main():
