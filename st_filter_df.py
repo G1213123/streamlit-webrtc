@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 
-def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+def filter_dataframe(df: pd.DataFrame ) -> pd.DataFrame:
     """
     Adds a UI on top of a dataframe to let viewers filter columns
 
@@ -18,10 +18,6 @@ def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         pd.DataFrame: Filtered dataframe
     """
-    modify = st.checkbox("Add filters")
-
-    if not modify:
-        return df
 
     df = df.copy()
 
@@ -39,16 +35,23 @@ def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     modification_container = st.container()
 
     with modification_container:
-        to_filter_columns = st.multiselect("Filter dataframe on", df.columns)
+        if 'filter_on' not in st.session_state:
+            to_filter_columns = st.multiselect("Filter dataframe on", df.columns, key='filter_on')
+        else:
+            to_filter_columns = st.session_state.filter_on
         for column in to_filter_columns:
             left, right = st.columns((1, 20))
             # Treat columns with < 10 unique values as categorical
             if is_categorical_dtype(df[column]) or df[column].nunique() < 10:
-                user_cat_input = right.multiselect(
-                    f"Values for {column}",
-                    df[column].unique(),
-                    default=list(df[column].unique()),
-                )
+                if 'cat_input' not in st.session_state:
+                    user_cat_input = right.multiselect(
+                        f"Values for {column}",
+                        df[column].unique(),
+                        default=list(df[column].unique()),
+                        key='cat_input'
+                    )
+                else:
+                    user_cat_input=st.session_state.cat_input
                 df = df[df[column].isin(user_cat_input)]
             elif is_numeric_dtype(df[column]):
                 _min = float(df[column].min())
