@@ -1,6 +1,7 @@
 import config
 import inference
 from YOLOv7.utils import class_names
+from st_filter_df import filter_dataframe
 
 import copy
 import platform
@@ -19,6 +20,7 @@ import uuid
 import av
 import cv2
 import numpy as np
+from io import BytesIO
 import streamlit as st
 from streamlit_drawable_canvas import st_canvas
 from streamlit_webrtc import (
@@ -70,10 +72,14 @@ class frame_counter_class():
 
 class st_counter_setup_container:
     def __init__(self, image, width, height, screen_width=640):
+        if 'counters_table' not in st.session_state:
+            st.session_state.counters_table = None
+        if 'counters' not in st.session_state:
+            st.session_state.counters = []
         self.display_scale = width / screen_width
         self.counters_df_display = None
-        self.counters_table = None
-        self.counters = []
+        self.counters_table = st.session_state.counters_table
+        self.counted = len(st.session_state.counters) > 0
         self.counters_num = 0
         self.wrapper = st.expander( "Setup Counter" )
         self.option = 'Empty'
@@ -90,51 +96,49 @@ class st_counter_setup_container:
             if canvas_result.json_data is not None:
                 if len( canvas_result.json_data['objects'] ) > 0:
                     self.canvas_result = canvas_result.json_data['objects']
+                    self.counters_num = len(self.canvas_result)
                     self.format_counters_display()
+                    if not self.counted:
+                        all(self.generate_counters())
                     st.caption('Screenline Counters')
-                    self.counters_df_display = st.dataframe( self.counters_table.style.format( precision=1 ) )
+                    self.counters_df_display = st.dataframe( st.session_state.counters_table.style.format( precision=1 ) )
+
 
     def generate_counters(self):
+        st.session_state.counters = []
         for ind in range( self.counters_num ):
             centroid = point( self.counters_table['left'][ind], self.counters_table['top'][ind] )
             xoffset = self.counters_table['x1'][ind]
             yoffset = self.counters_table['y1'][ind]
             counter = passing_object_counter.init_centroid( centroid, xoffset, yoffset, ind, self.display_scale )
-            self.counters.append( counter )
+            st.session_state.counters.append( counter )
+            self.sync_session_state()
             yield counter
 
     def show_counter_results(self):
-        if len( self.counters ) > 0:
-            if 'index' not in st.session_state:
-                st.session_state.counter_option_index = 0
-            if 'counter_result_options' not in st.session_state:
-                st.session_state.counter_result_options = [d.id for d in self.counters]
+        if len( st.session_state.counters ) > 0:
             with self.wrapper:
-                # if st.session_state.counter_option_index == 0:
-                #     st.session_state.counter_option_index = st.selectbox(
-                #         'Counter Result',
-                #         options=st.session_state.counter_result_options,
-                #     )
-                #     selected_counter = [x for x in self.counters if x.id == st.session_state.counter_result_options[
-                #         st.session_state.counter_option_index]][0]
+                st.caption('Screenline Counters Result')
                 if self.counter_result_display is not None:
-                    self.counter_result_display.dataframe( pd.DataFrame( [x.counted_objects for x in self.counters], index=[f'Counter_{i.id}' for i in self.counters] ).transpose() )
+                    self.counter_result_display.dataframe( filter_dataframe(pd.DataFrame( [x.counted_objects for x in st.session_state.counters], index=[f'Counter_{i.id}' for i in st.session_state.counters] ).transpose() ))
                 else:
-                    st.caption( 'Screenline Counters Result' )
-                    self.counter_result_display = st.dataframe( pd.DataFrame( [x.counted_objects for x in self.counters], index=[f'Counter_{i.id}' for i in self.counters] ).transpose() )
+                    self.counter_result_display = st.dataframe( filter_dataframe(pd.DataFrame( [x.counted_objects for x in st.session_state.counters], index=[f'Counter_{i.id}' for i in st.session_state.counters] ).transpose() ))
 
-    def format_counters_display(self, results=None):
+    def format_counters_display(self):
         self.counters_table = pd.json_normalize( self.canvas_result )
         show_columns = ['type', 'left', 'top', 'x1', 'x2', 'y1', 'y2', 'width', 'height']
-        self.counters_num = len( self.counters_table.index )
         if self.counters_table is not None:
             self.counters_table = self.counters_table[show_columns]
             # self.counters_table.style.format(precision=1)
         else:
             return None
-        if results is not None and len( results ) == len( self.counters_table.index ):
-            self.counters_table['count'] = [r.count for r in results]
+        if len(st.session_state.counters) == len(self.counters_table):
+            self.counters_table['count'] = [r.count for r in st.session_state.counters]
+        self.sync_session_state()
         return self.counters_table
+
+    def sync_session_state(self):
+        st.session_state.counters_table = self.counters_table
 
 
 class st_variables_container:
@@ -394,7 +398,9 @@ def video_object_detection(variables):
 
     if 'result_list' not in st.session_state:
         st.session_state.result_list = []
-    passing_object_counter_list = []
+    if 'video' not in st.session_state:
+        st.session_state.video = None
+
 
     file = st.file_uploader( 'Choose a video', type=['avi', 'mp4', 'mov'] )
     if file is not None:
@@ -410,10 +416,9 @@ def video_object_detection(variables):
         success, image = cap.read()
 
         passing_counter = st_counter_setup_container( image, width, height )
-        passing_object_counter_list = list( passing_counter.generate_counters() )
 
-        # size limited by streamlit cloud service
-        if width > 1920 or height > 1080:
+        # size limited by streamlit cloud service (superseded)
+        if width > 99999 or height > 99999:
             st.warning( f"File resolution [{width}x{height}] exceeded limit [1920x1080], "
                         f"please consider scale down the video", icon="⚠️" )
         else:
@@ -458,7 +463,7 @@ def video_object_detection(variables):
                     detections = detector( frame )
                     # Update object localizer
                     image, result = track_and_annotate_detections( frame, detections, sort_tracker,
-                                                                   passing_object_counter_list, progress( 0 ) )
+                                                                   st.session_state.counters, progress( 0 ) )
                     process.stdin.write( cv2.cvtColor( image, cv2.COLOR_BGR2RGB ).astype( np.uint8 ).tobytes() )
                     st.session_state['result_list'].append( result )
 
@@ -472,25 +477,30 @@ def video_object_detection(variables):
                 cap.release()
                 tfile.close()
 
-                st.video( output_path)
+                # TODO: skip writing the analysis result into a temp file and read into memory
+                with open(output_path, "rb") as fh:
+                    buf = BytesIO(fh.read())
+                st.session_state.video = buf
                 os.remove( output_path )
 
                 progress_bar.progress( 100 )
                 progress_txt.empty()
 
-                # Dumping analysis result into table
-                try:
-                    st.dataframe( pd.DataFrame.from_records( [item for sublist in st.session_state['result_list'] for item in sublist],
-                                                             columns=Detection._fields ),
-                                  # .style.apply(color_row, axis=1), TODO: add color to df by row index
-                                  use_container_width=True )
+            if st.session_state.video is not None:
+                st.video( st.session_state.video)
 
-                except ValueError as e:
-                    'No tracking data found'
-                    e
-                passing_counter.counters_df_display.dataframe(
-                    passing_counter.format_counters_display( passing_object_counter_list ).style.format( precision=1 ) )
-                passing_counter.show_counter_results()
+            # Dumping analysis result into table
+            if st.session_state['result_list'] is not None:
+                st.dataframe(
+                    pd.DataFrame.from_records([item for sublist in st.session_state['result_list'] for item in sublist],
+                                              columns=Detection._fields),
+                    # .style.apply(color_row, axis=1), TODO: add color to df by row index
+                    use_container_width=True)
+
+                if st.session_state.counters_table is not None:
+                    passing_counter.counters_df_display.dataframe(
+                        passing_counter.format_counters_display( ).style.format( precision=1 ) )
+                    passing_counter.show_counter_results()
 
 
 def live_object_detection(variables):
@@ -530,7 +540,7 @@ def live_object_detection(variables):
         detections = detector( image )
         counter = frame_counter
         annotated_image, result = track_and_annotate_detections( image, detections, sort_tracker,
-                                                                 passing_object_counters,
+                                                                 st.session_state.counters,
                                                                  counter() )
         counter( 1 )
 
@@ -556,10 +566,7 @@ def live_object_detection(variables):
         image = frame_queue.get()
         if counter_setup_container is None:
             counter_setup_container = st_counter_setup_container( image, image.shape[1], image.shape[0] )
-    try:
-        passing_object_counters = list( counter_setup_container.generate_counters() )
-    except:
-        passing_object_counters = None
+
 
     if st.checkbox( "Show the detected labels", value=True ):
         if webrtc_ctx.state.playing:
