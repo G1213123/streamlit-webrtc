@@ -31,6 +31,12 @@ from streamlit_webrtc import (
     webrtc_streamer,
 )
 from PIL import Image
+from pandas.api.types import (
+    is_categorical_dtype,
+    is_datetime64_any_dtype,
+    is_numeric_dtype,
+    is_object_dtype,
+)
 
 st.set_page_config( layout="wide" )
 logger = logging.getLogger( __name__ )
@@ -74,6 +80,12 @@ class frame_counter_class():
 
 class st_counter_setup_container:
     def __init__(self, image, width, height, screen_width=640):
+        self.user_num_input = None
+        self.user_cat_input = None
+        self.to_filter_columns = None
+        self.modification_container = None
+        self.left = None
+        self.right = None
         if 'counters_table' not in st.session_state:
             st.session_state.counters_table = None
         if 'counters' not in st.session_state:
@@ -89,6 +101,7 @@ class st_counter_setup_container:
         self.counter_result_display = None
         screen_height = height // self.display_scale
         with self.wrapper:
+            st.caption("Draw lines on the below picture to set up counting function")
             canvas_result = st_canvas(
                 width=screen_width,
                 height=screen_height,
@@ -100,18 +113,18 @@ class st_counter_setup_container:
             if canvas_result.json_data is not None:
                 if len( canvas_result.json_data['objects'] ) > 0:
                     self.canvas_result = canvas_result.json_data['objects']
-                    self.counters_num = len(self.canvas_result)
+                    self.counters_num = len( self.canvas_result )
                     self.format_counters_display()
-                    all(self.generate_counters())
-                    st.caption('Screenline Counters')
-                    self.counters_df_display = st.dataframe( st.session_state.counters_table.style.format( precision=1 ) )
+                    all( self.generate_counters() )
+                    st.caption( 'Screenline Counters' )
+                    self.counters_df_display = st.dataframe(
+                        st.session_state.counters_table.style.format( precision=1 ) )
                     st.caption( 'Screenline Counters Result' )
-
 
     def generate_counters(self):
         if not st.session_state.counted:
             st.session_state.counters = []
-        for ind in range( len(st.session_state.counters), self.counters_num ):
+        for ind in range( len( st.session_state.counters ), self.counters_num ):
             centroid = point( self.counters_table['left'][ind], self.counters_table['top'][ind] )
             xoffset = self.counters_table['x1'][ind]
             yoffset = self.counters_table['y1'][ind]
@@ -120,23 +133,104 @@ class st_counter_setup_container:
             self.sync_session_state()
             yield counter
 
+    def filter_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Adds a UI on top of a dataframe to let viewers filter columns
+
+        Args:
+            df (pd.DataFrame): Original dataframe
+
+        Returns:
+            pd.DataFrame: Filtered dataframe
+        """
+
+        df = df.copy()
+
+        if 'to_filter_columns' not in st.session_state:
+            st.session_state.to_filter_columns = None
+        if 'user_cat_input' not in st.session_state:
+            st.session_state.user_cat_input = None
+
+        # Try to convert datetimes into a standard format (datetime, no timezone)
+        for col in df.columns:
+            if is_object_dtype( df[col] ):
+                try:
+                    df[col] = pd.to_datetime( df[col] )
+                except Exception:
+                    pass
+
+            if is_datetime64_any_dtype( df[col] ):
+                df[col] = df[col].dt.tz_localize( None )
+
+        if self.modification_container is None:
+            self.modification_container = st.container()
+
+        with self.modification_container:
+            if self.to_filter_columns is None:
+                self.to_filter_columns = st.multiselect( "Filter dataframe on", df.columns )
+            for column in self.to_filter_columns:
+                if self.left is None:
+                    self.left, self.right = st.columns( (1, 20) )
+                # Treat columns with < 10 unique values as categorical
+                if is_categorical_dtype( df[column] ) or df[column].nunique() < 10:
+                    if self.user_cat_input is None:
+                        self.user_cat_input = self.right.multiselect(
+                            f"Values for {column}",
+                            df[column].unique(),
+                            default=list( df[column].unique() ),
+                        )
+                    df = df[df[column].isin( self.user_cat_input )]
+                elif is_numeric_dtype( df[column] ):
+                    _min = float( df[column].min() )
+                    _max = float( df[column].max() )
+                    step = (_max - _min) / 100
+                    if self.user_num_input is None:
+                        self.user_num_input = user_num_input = self.right.slider(
+                            f"Values for {column}",
+                            min_value=_min,
+                            max_value=_max,
+                            value=(_min, _max),
+                            step=step,
+                            key='user_num_input'
+                        )
+                    df = df[df[column].between( *self.user_num_input )]
+                elif is_datetime64_any_dtype( df[column] ):
+                    user_date_input = self.right.date_input(
+                        f"Values for {column}",
+                        value=(
+                            df[column].min(),
+                            df[column].max(),
+                        ),
+                    )
+                    if len( user_date_input ) == 2:
+                        user_date_input = tuple( map( pd.to_datetime, user_date_input ) )
+                        start_date, end_date = user_date_input
+                        df = df.loc[df[column].between( start_date, end_date )]
+                else:
+                    user_text_input = self.right.text_input(
+                        f"Substring or regex in {column}",
+                    )
+                    if user_text_input:
+                        df = df[df[column].astype( str ).str.contains( user_text_input )]
+
+        return df
 
     def show_counter_results(self):
         if len( st.session_state.counters ) > 0:
             with self.wrapper:
-                #st.caption('Screenline Counters Result')
+                # st.caption('Screenline Counters Result')
                 result_df = [d.counted_objects for d in st.session_state.counters]
-                counter_id = [[f'counter_{i}']*len(r) for i,r in enumerate(result_df)]
+                counter_id = [[f'counter_{i}'] * len( r ) for i, r in enumerate( result_df )]
                 counter_id = [item for sublist in counter_id for item in sublist]
                 result_df = [item for sublist in result_df for item in sublist]
-                result_df = pd.DataFrame(result_df)
-                result_df.insert(0, 'counter', counter_id)
-                result_df = filter_dataframe( pd.DataFrame( result_df ) )
+                result_df = pd.DataFrame( result_df )
+                result_df.insert( 0, 'counter', counter_id )
+                result_df = self.filter_dataframe( pd.DataFrame( result_df, columns= ['counter'] + list(Detection._fields)) )
 
                 if self.counter_result_display is not None:
-                    self.counter_result_display.dataframe(result_df)
+                    self.counter_result_display.dataframe( result_df , use_container_width=True )
                 else:
-                    self.counter_result_display = st.dataframe(result_df)
+                    self.counter_result_display = st.dataframe( result_df, use_container_width=True  )
 
     def format_counters_display(self):
         self.counters_table = pd.json_normalize( self.canvas_result )
@@ -146,7 +240,7 @@ class st_counter_setup_container:
             # self.counters_table.style.format(precision=1)
         else:
             return None
-        if len(st.session_state.counters) == len(self.counters_table):
+        if len( st.session_state.counters ) == len( self.counters_table ):
             self.counters_table['count'] = [r.count for r in st.session_state.counters]
         self.sync_session_state()
         return self.counters_table
@@ -232,7 +326,7 @@ class passing_object_counter():
 
     def reset(self):
         self.count = 0
-        self.counted_objects=[]
+        self.counted_objects = []
 
 
 @st.experimental_memo
@@ -402,6 +496,7 @@ def track_and_annotate_detections(image, detections, sort_tracker, passing_count
 
     return image, result
 
+
 def reset_counters():
     for c in st.session_state.counters:
         c.reset()
@@ -429,10 +524,10 @@ def video_object_detection(variables):
         if file != st.session_state.file:
             st.session_state.file = file
             st.session_state.video = None
-            st.session_state.counters=[]
-            st.session_state.counters_table=[]
-            st.session_state.counted=False
-            st.session_state.result_list=[]
+            st.session_state.counters = []
+            st.session_state.counters_table = []
+            st.session_state.counted = False
+            st.session_state.result_list = []
 
         # save the uploaded file to a temporary location
         tfile = tempfile.NamedTemporaryFile( delete=True )
@@ -508,8 +603,8 @@ def video_object_detection(variables):
                 tfile.close()
 
                 # TODO: skip writing the analysis result into a temp file and read into memory
-                with open(output_path, "rb") as fh:
-                    buf = BytesIO(fh.read())
+                with open( output_path, "rb" ) as fh:
+                    buf = BytesIO( fh.read() )
                 st.session_state.video = buf
                 os.remove( output_path )
 
@@ -518,22 +613,23 @@ def video_object_detection(variables):
 
                 st.session_state.counted = True
             if st.session_state.video is not None:
-                st.video( st.session_state.video)
+                st.video( st.session_state.video )
 
             # Dumping analysis result into table
-            if len(st.session_state.result_list) > 0:
+            if len( st.session_state.result_list ) > 0:
                 st.dataframe(
-                    pd.DataFrame.from_records([item for sublist in st.session_state['result_list'] for item in sublist],
-                                              columns=Detection._fields),
+                    pd.DataFrame.from_records(
+                        [item for sublist in st.session_state['result_list'] for item in sublist],
+                        columns=Detection._fields ),
                     # .style.apply(color_row, axis=1), TODO: add color to df by row index
-                    use_container_width=True)
+                    use_container_width=True )
 
                 if st.session_state.counters_table is not None:
                     passing_counter.counters_df_display.dataframe(
-                        passing_counter.format_counters_display( ).style.format( precision=1 ) )
+                        passing_counter.format_counters_display().style.format( precision=1 ) )
                     if st.session_state.counted:
                         passing_counter.show_counter_results()
-                #st.session_state.counted = False
+                # st.session_state.counted = False
 
 
 def live_object_detection(variables):
@@ -551,7 +647,7 @@ def live_object_detection(variables):
                    "credential": st.secrets['CREDENTIAL'],
                    } if st.secrets['URL'] is not None else None
     RTC_CONFIGURATION = RTCConfiguration(
-    {"iceServers": [{"url": "stun:stun.l.google.com:19302"},
+        {"iceServers": [{"url": "stun:stun.l.google.com:19302"},
                         turn_server]}
     )
 
@@ -599,7 +695,7 @@ def live_object_detection(variables):
     # capture image for the counter setup container
     if webrtc_ctx.state.playing:
         image = frame_queue.get()
-        if len(st.session_state.counters) > 0:
+        if len( st.session_state.counters ) > 0:
             st.session_state.counted = True
         counter_setup_container = st_counter_setup_container( image, image.shape[1], image.shape[0] )
 
@@ -616,7 +712,7 @@ def live_object_detection(variables):
                 result = result_queue.get( timeout=1.0 )
             except queue.Empty:
                 result = None
-            labels_placeholder.dataframe( result )
+            labels_placeholder.dataframe( result, use_container_width=True  )
 
             if counter_setup_container is not None:
                 counter_setup_container.show_counter_results()
