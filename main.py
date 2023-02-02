@@ -50,8 +50,11 @@ def generate_label_colors():
 COLORS = generate_label_colors()
 
 
-def color_row(s):
-    return COLORS[s.name]
+def color_row(row):
+    s = row['id']
+    x = COLORS[s]
+    css = "background-color: rgb(" + ", ".join( map( str, x ) ) + ");"
+    return [css] * len( row )
 
 
 class Detection( NamedTuple ):
@@ -79,7 +82,7 @@ class frame_counter_class():
 
 
 class st_counter_setup_container:
-    def __init__(self, image, width, height, screen_width=640):
+    def __init__(self, image, width, height, screen_width=1200):
         self.user_num_input = None
         self.user_cat_input = None
         self.to_filter_columns = None
@@ -96,12 +99,12 @@ class st_counter_setup_container:
         self.counters_df_display = None
         self.counters_table = st.session_state.counters_table
         self.counters_num = 0
-        self.wrapper = st.expander( "Setup Counter" )
+        self.wrapper = st.expander( "**Setup Counter**" )
         self.option = 'Empty'
         self.counter_result_display = None
         screen_height = height // self.display_scale
         with self.wrapper:
-            st.caption("Draw lines on the below picture to set up counting function")
+            st.caption( "Draw lines on the below picture to set up counting function" )
             canvas_result = st_canvas(
                 width=screen_width,
                 height=screen_height,
@@ -116,10 +119,10 @@ class st_counter_setup_container:
                     self.counters_num = len( self.canvas_result )
                     self.format_counters_display()
                     all( self.generate_counters() )
-                    st.caption( 'Screenline Counters' )
+                    st.markdown( '**Screenline Counters**' )
                     self.counters_df_display = st.dataframe(
-                        st.session_state.counters_table.style.format( precision=1 ) )
-                    st.caption( 'Screenline Counters Result' )
+                        st.session_state.counters_table.style.format( precision=1 ), use_container_width=True, )
+                    st.markdown( '**Screenline Counters Result**' )
 
     def generate_counters(self):
         if not st.session_state.counted:
@@ -136,6 +139,7 @@ class st_counter_setup_container:
     def filter_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Adds a UI on top of a dataframe to let viewers filter columns
+        https://github.com/tylerjrichards/st-filter-dataframe
 
         Args:
             df (pd.DataFrame): Original dataframe
@@ -216,7 +220,7 @@ class st_counter_setup_container:
         return df
 
     def show_counter_results(self):
-        if len( st.session_state.counters ) > 0:
+        if len( st.session_state.counters ) > 0 and  st.session_state.counted:
             with self.wrapper:
                 # st.caption('Screenline Counters Result')
                 result_df = [d.counted_objects for d in st.session_state.counters]
@@ -225,12 +229,16 @@ class st_counter_setup_container:
                 result_df = [item for sublist in result_df for item in sublist]
                 result_df = pd.DataFrame( result_df )
                 result_df.insert( 0, 'counter', counter_id )
-                result_df = self.filter_dataframe( pd.DataFrame( result_df, columns= ['counter'] + list(Detection._fields)) )
-
+                result_df = self.filter_dataframe(
+                    pd.DataFrame( result_df, columns=['counter'] + list( Detection._fields ) ) )
+                result_df=result_df.style.background_gradient(axis=0, gmap=result_df['id'], cmap='BuPu')
                 if self.counter_result_display is not None:
-                    self.counter_result_display.dataframe( result_df , use_container_width=True )
+                    self.counter_result_display.dataframe( result_df, use_container_width=True )
                 else:
-                    self.counter_result_display = st.dataframe( result_df, use_container_width=True  )
+                    self.counter_result_display = st.dataframe( result_df, use_container_width=True )
+
+                self.counters_df_display.dataframe(
+                    self.format_counters_display().style.format( precision=1 ) )
 
     def format_counters_display(self):
         self.counters_table = pd.json_normalize( self.canvas_result )
@@ -543,7 +551,7 @@ def video_object_detection(variables):
         passing_counter = st_counter_setup_container( image, width, height )
 
         # size limited by streamlit cloud service (superseded)
-        if width > 99999 or height > 99999:
+        if width > 1920 or height > 1080:
             st.warning( f"File resolution [{width}x{height}] exceeded limit [1920x1080], "
                         f"please consider scale down the video", icon="⚠️" )
         else:
@@ -617,19 +625,12 @@ def video_object_detection(variables):
 
             # Dumping analysis result into table
             if len( st.session_state.result_list ) > 0:
-                st.dataframe(
-                    pd.DataFrame.from_records(
+                result_df =  pd.DataFrame.from_records(
                         [item for sublist in st.session_state['result_list'] for item in sublist],
-                        columns=Detection._fields ),
-                    # .style.apply(color_row, axis=1), TODO: add color to df by row index
-                    use_container_width=True )
-
-                if st.session_state.counters_table is not None:
-                    passing_counter.counters_df_display.dataframe(
-                        passing_counter.format_counters_display().style.format( precision=1 ) )
-                    if st.session_state.counted:
-                        passing_counter.show_counter_results()
-                # st.session_state.counted = False
+                        columns=Detection._fields )
+                st.dataframe(result_df.style.background_gradient(axis=0, gmap=result_df['id'], cmap='BuPu')
+                    , use_container_width=True )
+                passing_counter.show_counter_results()
 
 
 def live_object_detection(variables):
@@ -695,12 +696,10 @@ def live_object_detection(variables):
     # capture image for the counter setup container
     if webrtc_ctx.state.playing:
         image = frame_queue.get()
+        counter_setup_container = st_counter_setup_container( image, image.shape[1], image.shape[0] )
+        passing_object_counters = st.session_state.counters
         if len( st.session_state.counters ) > 0:
             st.session_state.counted = True
-        counter_setup_container = st_counter_setup_container( image, image.shape[1], image.shape[0] )
-
-        passing_object_counters = st.session_state.counters
-
         labels_placeholder = st.empty()
         # NOTE: The video transformation with object detection and
         # this loop displaying the result labels are running
@@ -712,10 +711,10 @@ def live_object_detection(variables):
                 result = result_queue.get( timeout=1.0 )
             except queue.Empty:
                 result = None
-            labels_placeholder.dataframe( result, use_container_width=True  )
-
+            labels_placeholder.dataframe( result, use_container_width=True )
             if counter_setup_container is not None:
                 counter_setup_container.show_counter_results()
+
     else:
         st.session_state.counters = []
         st.session_state.counters_table = []
