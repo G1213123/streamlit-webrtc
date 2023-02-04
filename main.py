@@ -21,6 +21,7 @@ import uuid
 import av
 import cv2
 import numpy as np
+import torch
 from io import BytesIO
 import streamlit as st
 from streamlit_drawable_canvas import st_canvas
@@ -221,7 +222,7 @@ class st_counter_setup_container:
         return df
 
     def show_counter_results(self):
-        if len( st.session_state.counters ) > 0 and  st.session_state.counted:
+        if len( st.session_state.counters ) > 0 and st.session_state.counted:
             with self.wrapper:
                 # st.caption('Screenline Counters Result')
                 result_df = [d.counted_objects for d in st.session_state.counters]
@@ -232,7 +233,7 @@ class st_counter_setup_container:
                 result_df.insert( 0, 'counter', counter_id )
                 result_df = self.filter_dataframe(
                     pd.DataFrame( result_df, columns=['counter'] + list( Detection._fields ) ) )
-                result_df=result_df.style.background_gradient(axis=0, gmap=result_df['id'], cmap='BuPu')
+                result_df = result_df.style.background_gradient( axis=0, gmap=result_df['id'], cmap='BuPu' )
                 if self.counter_result_display is not None:
                     self.counter_result_display.dataframe( result_df, use_container_width=True )
                 else:
@@ -414,9 +415,7 @@ def download_file(url, download_to: Path, expected_size=None):
 
 @st.experimental_singleton
 def model_init(model, confidence_threshold=0.5):
-    """Object detection demo with YOLO v7.
-    This model and code are based on
-    https://github.com/WongKinYiu/yolov7/releases
+    """Object detection demo with YOLO v8.
     """
 
     MODEL_LOCAL_PATH = config.MODEL_PATH / f'{config.STYLES[model]}.onnx'
@@ -429,7 +428,7 @@ def model_init(model, confidence_threshold=0.5):
     if cache_key in st.session_state:
         detector = st.session_state[cache_key]
     else:
-        detector = inference.init( model, conf_thres=confidence_threshold )
+        detector = inference.YOLO( "yolov8n.pt" )
         st.session_state[cache_key] = detector
     print( st.session_state[cache_key] )
     return detector
@@ -444,16 +443,17 @@ def track_and_annotate_detections(image, detections, sort_tracker, passing_count
         cv2.putText( image, f'frame:{frame}', (40, 40), cv2.FONT_HERSHEY_SIMPLEX,
                      1, (240, 240, 240), 2 )
 
-    boxes, confidences, ids = detections
-
     dets_to_sort = np.empty( (0, 6) )
 
-    for box, confidence, idx in zip( boxes, confidences, ids ):
-        (startX, startY, endX, endY) = box.astype( "int" )
+    if detections.shape[0]:
+        boxes, confidences,  ids = detections[:, 0, 0:4], detections[:, 0, 4], detections[:, 0, -1]
 
-        # NOTE: We send in detected object class too
-        dets_to_sort = np.vstack( (dets_to_sort,
-                                   np.array( [startX, startY, endX, endY, confidence, idx] )) )
+        for box, confidence, idx in zip( boxes, confidences, ids ):
+            (startX, startY, endX, endY) = box.tolist()
+
+            # NOTE: We send in detected object class too
+            dets_to_sort = np.vstack( (dets_to_sort,
+                                       np.array( [startX, startY, endX, endY, confidence.item(), idx.item()] )) )
 
     # Run SORT and get tracked objects
     tracked_dets = sort_tracker.update( dets_to_sort )
@@ -530,6 +530,7 @@ def video_object_detection(variables):
 
     file = st.file_uploader( 'Choose a video', type=['avi', 'mp4', 'mov'] )
     if file is not None:
+        # reset counters and state when new video is uploaded
         if file != st.session_state.file:
             st.session_state.file = file
             st.session_state.video = None
@@ -556,10 +557,6 @@ def video_object_detection(variables):
             st.warning( f"File resolution [{width}x{height}] exceeded limit [1920x1080], "
                         f"please consider scale down the video", icon="⚠️" )
         else:
-            gcd_wh = gcd( width, height )
-            st.info( f"Uploaded video has aspect ratio of [{width // gcd_wh}:{height // gcd_wh}], "
-                     f"best detection with model {best_match_ratio( width, height, config.STYLES )}"
-                     )
             detect = st.button( 'Detect' )
             if detect:
                 progress_txt = st.caption( f'Analysing Video: 0 out of {total_frame} frames' )
@@ -594,9 +591,17 @@ def video_object_detection(variables):
                     except Exception as e:
                         print( e )
                         continue
-                    detections = detector( frame )
+                    detections = detector( frame )[0]
+                    boxes = detections.boxes.data
+                    results = [i.data for i in
+                               inference.non_max_suppression( boxes, conf_thres=confidence_threshold, nm=1 ) if
+                               i.shape[0] > 0]
+                    if results:
+                        results = torch.stack( results, 0 )
+                    else:
+                        results = torch.tensor( [] )
                     # Update object localizer
-                    image, result = track_and_annotate_detections( frame, detections, sort_tracker,
+                    image, result = track_and_annotate_detections( frame, results, sort_tracker,
                                                                    st.session_state.counters, progress( 0 ) )
                     process.stdin.write( cv2.cvtColor( image, cv2.COLOR_BGR2RGB ).astype( np.uint8 ).tobytes() )
                     st.session_state['result_list'].append( result )
@@ -625,14 +630,15 @@ def video_object_detection(variables):
                 st.video( st.session_state.video )
 
             # Dumping analysis result into table
-            if st.session_state.counted and st.checkbox("Show all detection results"):
-                if len( st.session_state.result_list ) > 0:
-                    result_df =  pd.DataFrame.from_records(
+            if st.session_state.counted:
+                if st.checkbox( "Show all detection results" ):
+                    if len( st.session_state.result_list ) > 0:
+                        result_df = pd.DataFrame.from_records(
                             [item for sublist in st.session_state['result_list'] for item in sublist],
                             columns=Detection._fields )
-                    st.dataframe(result_df.style.background_gradient(axis=0, gmap=result_df['id'], cmap='BuPu')
-                        , use_container_width=True )
-                    passing_counter.show_counter_results()
+                        st.dataframe( result_df
+                                      , use_container_width=True )
+                passing_counter.show_counter_results()
 
 
 def live_object_detection(variables):
@@ -646,11 +652,11 @@ def live_object_detection(variables):
 
     servers = [{"url": "stun:stun.l.google.com:19302"}]
     if 'URL' in st.secrets:
-        servers.append({"urls": st.secrets['URL'],
-                       "username": st.secrets['USERNAME'],
-                       "credential": st.secrets['CREDENTIAL'],
-                       })
-    RTC_CONFIGURATION = RTCConfiguration({"iceServers": servers})
+        servers.append( {"urls": st.secrets['URL'],
+                         "username": st.secrets['USERNAME'],
+                         "credential": st.secrets['CREDENTIAL'],
+                         } )
+    RTC_CONFIGURATION = RTCConfiguration( {"iceServers": servers} )
 
     # init frame counter, object detector, tracker and passing object counter
     frame_counter = frame_counter_class()
@@ -726,8 +732,8 @@ def main():
     st.header( "Object Detecting and Tracking demo" )
 
     pages = {
-        "Real time object detection (sendrecv)": live_object_detection,
         "Upload Video for detection": video_object_detection,
+        "Real time object detection (sendrecv)": live_object_detection,
     }
     page_titles = pages.keys()
 
