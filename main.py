@@ -641,9 +641,15 @@ def live_object_detection(variables):
 
     # public-stun-list.txt
     # https://gist.github.com/mondain/b0ec1cf5f60ae726202e
+    # turn server
+    # https://www.metered.ca/tools/openrelay/
+    turn_server = {"urls": st.secrets['URL'],
+                   "username": st.secrets['USERNAME'],
+                   "credential": st.secrets['CREDENTIAL'],
+                   } if st.secrets['URL'] is not None else None
     RTC_CONFIGURATION = RTCConfiguration(
         {"iceServers": [{"url": "stun:stun.l.google.com:19302"},
-                        ]}
+                        turn_server]}
     )
 
     # init frame counter, object detector, tracker and passing object counter
