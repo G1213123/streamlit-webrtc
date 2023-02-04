@@ -3,7 +3,6 @@ import streamlit
 import config
 import inference
 from YOLOv7.utils import class_names
-from st_filter_df import filter_dataframe
 
 import copy
 import platform
@@ -91,13 +90,15 @@ class st_counter_setup_container:
         self.right = None
         if 'counters_table' not in st.session_state:
             st.session_state.counters_table = None
+            self.counters_table = None
+        else:
+            self.counters_table = st.session_state.counters_table
         if 'counters' not in st.session_state:
             st.session_state.counters = []
         if 'counted' not in st.session_state:
             st.session_state.counted = False
         self.display_scale = width / screen_width
         self.counters_df_display = None
-        self.counters_table = st.session_state.counters_table
         self.counters_num = 0
         self.wrapper = st.expander( "**Setup Counter**" )
         self.option = 'Empty'
@@ -624,13 +625,14 @@ def video_object_detection(variables):
                 st.video( st.session_state.video )
 
             # Dumping analysis result into table
-            if len( st.session_state.result_list ) > 0:
-                result_df =  pd.DataFrame.from_records(
-                        [item for sublist in st.session_state['result_list'] for item in sublist],
-                        columns=Detection._fields )
-                st.dataframe(result_df.style.background_gradient(axis=0, gmap=result_df['id'], cmap='BuPu')
-                    , use_container_width=True )
-                passing_counter.show_counter_results()
+            if st.session_state.counted and st.checkbox("Show all detection results"):
+                if len( st.session_state.result_list ) > 0:
+                    result_df =  pd.DataFrame.from_records(
+                            [item for sublist in st.session_state['result_list'] for item in sublist],
+                            columns=Detection._fields )
+                    st.dataframe(result_df.style.background_gradient(axis=0, gmap=result_df['id'], cmap='BuPu')
+                        , use_container_width=True )
+                    passing_counter.show_counter_results()
 
 
 def live_object_detection(variables):
@@ -641,10 +643,14 @@ def live_object_detection(variables):
 
     # public-stun-list.txt
     # https://gist.github.com/mondain/b0ec1cf5f60ae726202e
-    RTC_CONFIGURATION = RTCConfiguration(
-        {"iceServers": [{"url": "stun:stun.l.google.com:19302"},
-                        ]}
-    )
+
+    servers = [{"url": "stun:stun.l.google.com:19302"}]
+    if 'URL' in st.secrets:
+        servers.append({"urls": st.secrets['URL'],
+                       "username": st.secrets['USERNAME'],
+                       "credential": st.secrets['CREDENTIAL'],
+                       })
+    RTC_CONFIGURATION = RTCConfiguration({"iceServers": servers})
 
     # init frame counter, object detector, tracker and passing object counter
     frame_counter = frame_counter_class()
