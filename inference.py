@@ -8,11 +8,11 @@ from ultralytics.yolo.utils.ops import xywh2xyxy, box_iou
 
 
 
-def init(model='yolov8n.pt', conf_thres=0.3, iou_thres=0.5):
+def init(model='yolov8x.pt', conf_thres=0.3, iou_thres=0.5):
     # Initialize YOLOv8 object detector
-    yolov7_detector = YOLO(model)
+    yolo_detector = YOLO(model)
 
-    return yolov7_detector
+    return yolo_detector
 
 def non_max_suppression(
         prediction,

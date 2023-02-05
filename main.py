@@ -1,4 +1,5 @@
 import streamlit
+import ultralytics
 
 import config
 import inference
