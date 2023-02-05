@@ -3,6 +3,7 @@ import streamlit
 import config
 import inference
 from YOLOv7.utils import class_names
+import detection_helpers
 
 import copy
 import platform
@@ -584,7 +585,8 @@ def video_object_detection(variables):
                 process = subprocess.Popen( [ffmpeg_source] + args, stdin=subprocess.PIPE )
 
                 # init object detector and tracker
-                detector = model_init( style, confidence_threshold )
+                detector = detection_helpers.Detector( confidence_threshold )
+                detector.load_model('yolov8n.pt')
                 sort_tracker = Sort( track_age, track_hits, iou_thres )
                 while cap.isOpened():
                     try:
