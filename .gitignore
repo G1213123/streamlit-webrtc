@@ -1,4 +1,4 @@
-models/
+models/*.onnx
 runs/
 storage/
 venv/
