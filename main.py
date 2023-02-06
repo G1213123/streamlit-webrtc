@@ -1,8 +1,7 @@
 import streamlit
 
+import bridge_wrapper
 import config
-import inference
-from YOLOv7.utils import class_names
 import detection_helpers
 
 import copy
@@ -430,7 +429,7 @@ def model_init(model, confidence_threshold=0.5):
     if cache_key in st.session_state:
         detector = st.session_state[cache_key]
     else:
-        detector = inference.init( model, conf_thres=confidence_threshold )
+        detector = detection_helpers.Detector( conf_thres=confidence_threshold )
         st.session_state[cache_key] = detector
     print( st.session_state[cache_key] )
     return detector
@@ -480,7 +479,7 @@ def track_and_annotate_detections(image, detections, sort_tracker, passing_count
         conf = track.conf
         categories = int( track.detclass )
         x1, y1, x2, y2 = [int( i ) for i in bbox_xyxy]
-        label = str( identities ) + ":" + class_names[categories] + "-" + "%.2f" % conf
+        #label = str( identities ) + ":" + class_names[categories] + "-" + "%.2f" % conf
         cv2.rectangle( image, (x1, y1), (x2, y2), COLORS[identities], 2 )
         cv2.putText( image, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX,
                      1, COLORS[identities], 2 )
@@ -586,8 +585,9 @@ def video_object_detection(variables):
 
                 # init object detector and tracker
                 detector = detection_helpers.Detector( confidence_threshold )
-                detector.load_model('yolov8n.pt')
-                sort_tracker = Sort( track_age, track_hits, iou_thres )
+                detector.load_model('weights/yolov7.pt', trace=False)
+                sort_tracker = bridge_wrapper.YOLOv7_DeepSORT(reID_model_path="./deep_sort/model_weights/mars-small128.pb", detector=detector)
+                frame_num = frame_counter_class()
                 while cap.isOpened():
                     try:
                         ret, frame = cap.read()
@@ -596,10 +596,10 @@ def video_object_detection(variables):
                     except Exception as e:
                         print( e )
                         continue
-                    detections = detector( frame )
+                    image, result = sort_tracker.track_video_stream( frame, frame_num(1), verbose=1 )
                     # Update object localizer
-                    image, result = track_and_annotate_detections( frame, detections, sort_tracker,
-                                                                   st.session_state.counters, progress( 0 ) )
+                    #image, result = track_and_annotate_detections( frame, detections, sort_tracker,
+                    #                                               st.session_state.counters, progress( 0 ) )
                     process.stdin.write( cv2.cvtColor( image, cv2.COLOR_BGR2RGB ).astype( np.uint8 ).tobytes() )
                     st.session_state['result_list'].append( result )
 

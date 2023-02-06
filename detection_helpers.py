@@ -3,11 +3,11 @@ import cv2
 import torch
 from numpy import random
 
-from YOLOv8.models.experimental import attempt_load
-from YOLOv8.utils.datasets import letterbox, np
-from YOLOv8.utils.general import check_img_size, non_max_suppression, apply_classifier,scale_coords, xyxy2xywh
-from YOLOv8.utils.plots import plot_one_box
-from YOLOv8.utils.torch_utils import select_device, load_classifier,TracedModel
+from models.experimental import attempt_load
+from utils.datasets import letterbox, np
+from utils.general import check_img_size, non_max_suppression, apply_classifier,scale_coords, xyxy2xywh
+from utils.plots import plot_one_box
+from utils.torch_utils import select_device, load_classifier,TracedModel
 
 
 class Detector:
