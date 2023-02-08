@@ -27,11 +27,11 @@ from models.yolo import Model
 from utils.autoanchor import check_anchors
 from utils.datasets import create_dataloader
 from utils.general import labels_to_class_weights, increment_path, labels_to_image_weights, init_seeds, \
-    fitness, strip_optimizer, get_latest_run, check_dataset, check_file, check_git_status, check_img_size, \
-    check_requirements, print_mutation, set_logging, one_cycle, colorstr
+    fitness, strip_optimizer, get_latest_run, check_dataset, check_file, check_img_size, \
+    print_mutation, set_logging, one_cycle, colorstr
 from utils.google_utils import attempt_download
 from utils.loss import ComputeLoss, ComputeLossOTA
-from utils.plots import plot_images, plot_labels, plot_results, plot_evolution
+from utils.plots import plot_images, plot_results, plot_evolution
 from utils.torch_utils import ModelEMA, select_device, intersect_dicts, torch_distributed_zero_first, is_parallel
 from utils.wandb_logging.wandb_utils import WandbLogger, check_wandb_resume
 
@@ -409,18 +409,18 @@ def train(hyp, opt, device, tb_writer=None):
             final_epoch = epoch + 1 == epochs
             if not opt.notest or final_epoch:  # Calculate mAP
                 wandb_logger.current_epoch = epoch + 1
-                results, maps, times = test.test(data_dict,
-                                                 batch_size=batch_size * 2,
-                                                 imgsz=imgsz_test,
-                                                 model=ema.ema,
-                                                 single_cls=opt.single_cls,
-                                                 dataloader=testloader,
-                                                 save_dir=save_dir,
-                                                 verbose=nc < 50 and final_epoch,
-                                                 plots=plots and final_epoch,
-                                                 wandb_logger=wandb_logger,
-                                                 compute_loss=compute_loss,
-                                                 is_coco=is_coco)
+                results, maps, times = test.test( data_dict,
+                                                  batch_size=batch_size * 2,
+                                                  imgsz=imgsz_test,
+                                                  model=ema.ema,
+                                                  single_cls=opt.single_cls,
+                                                  dataloader=testloader,
+                                                  save_dir=save_dir,
+                                                  verbose=nc < 50 and final_epoch,
+                                                  plots=plots and final_epoch,
+                                                  wandb_logger=wandb_logger,
+                                                  compute_loss=compute_loss,
+                                                  is_coco=is_coco )
 
             # Write
             with open(results_file, 'a') as f:
@@ -488,18 +488,18 @@ def train(hyp, opt, device, tb_writer=None):
         logger.info('%g epochs completed in %.3f hours.\n' % (epoch - start_epoch + 1, (time.time() - t0) / 3600))
         if opt.data.endswith('coco.yaml') and nc == 80:  # if COCO
             for m in (last, best) if best.exists() else (last):  # speed, mAP tests
-                results, _, _ = test.test(opt.data,
-                                          batch_size=batch_size * 2,
-                                          imgsz=imgsz_test,
-                                          conf_thres=0.001,
-                                          iou_thres=0.7,
-                                          model=attempt_load(m, device).half(),
-                                          single_cls=opt.single_cls,
-                                          dataloader=testloader,
-                                          save_dir=save_dir,
-                                          save_json=True,
-                                          plots=False,
-                                          is_coco=is_coco)
+                results, _, _ = test.test( opt.data,
+                                           batch_size=batch_size * 2,
+                                           imgsz=imgsz_test,
+                                           conf_thres=0.001,
+                                           iou_thres=0.7,
+                                           model=attempt_load(m, device).half(),
+                                           single_cls=opt.single_cls,
+                                           dataloader=testloader,
+                                           save_dir=save_dir,
+                                           save_json=True,
+                                           plots=False,
+                                           is_coco=is_coco )
 
         # Strip optimizers
         final = best if best.exists() else last  # final model

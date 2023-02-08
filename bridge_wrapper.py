@@ -40,7 +40,8 @@ class YOLOv7_DeepSORT:
 
     def __init__(self, reID_model_path: str, detector, max_cosine_distance: float = 0.4, nn_budget: float = None,
                  nms_max_overlap: float = 1.0,
-                 coco_names_path: str = "./io_data/input/classes/coco.names", ):
+                 coco_names_path: str = "./io_data/input/classes/coco.names",
+                 max_iou_distance=0.7, max_age=75, n_init=3):
         '''
         args: 
             reID_model_path: Path of the model which uses generates the embeddings for the cropped area for Re identification
@@ -59,7 +60,7 @@ class YOLOv7_DeepSORT:
         self.encoder = create_box_encoder( reID_model_path, batch_size=1 )
         metric = nn_matching.NearestNeighborDistanceMetric( "cosine", max_cosine_distance,
                                                             nn_budget )  # calculate cosine distance metric
-        self.tracker = Tracker( metric )  # initialize tracker
+        self.tracker = Tracker( metric, max_iou_distance, max_age, n_init )  # initialize tracker
 
     def track_video(self, video: str, output: str, skip_frames: int = 0, show_live: bool = False,
                     count_objects: bool = False, verbose: int = 0):
@@ -133,7 +134,8 @@ class YOLOv7_DeepSORT:
             # ---------------------------------- DeepSORT tacker work starts here ------------------------------------------------------------
             features = self.encoder( frame,
                                      bboxes )  # encode detections and feed to tracker. [No of BB / detections per frame, embed_size]
-            detections = [Detection( bbox, score, class_name, feature ) for bbox, score, class_name, feature in
+            detections = [Detection( bbox, score, class_name, feature, frame_num ) for bbox, score, class_name, feature
+                          in
                           zip( bboxes, scores, names,
                                features )]  # [No of BB per frame] deep_sort.detection.Detection object
 
@@ -159,7 +161,8 @@ class YOLOv7_DeepSORT:
                 color = [i * 255 for i in color]
                 cv2.rectangle( frame, (int( bbox[0] ), int( bbox[1] )), (int( bbox[2] ), int( bbox[3] )), color, 2 )
                 cv2.rectangle( frame, (int( bbox[0] ), int( bbox[1] - 30 )), (
-                int( bbox[0] ) + (len( class_name ) + len( str( track.track_id ) )) * 17, int( bbox[1] )), color, -1 )
+                    int( bbox[0] ) + (len( class_name ) + len( str( track.track_id ) )) * 17, int( bbox[1] )), color,
+                               -1 )
                 cv2.putText( frame, class_name + " : " + str( track.track_id ), (int( bbox[0] ), int( bbox[1] - 11 )),
                              0, 0.6, (255, 255, 255), 1, lineType=cv2.LINE_AA )
 
@@ -238,7 +241,7 @@ class YOLOv7_DeepSORT:
         # ---------------------------------- DeepSORT tacker work starts here ------------------------------------------------------------
         features = self.encoder( frame,
                                  bboxes )  # encode detections and feed to tracker. [No of BB / detections per frame, embed_size]
-        detections = [Detection( bbox, score, class_name, feature ) for bbox, score, class_name, feature in
+        detections = [Detection( bbox, score, class_name, feature, frame_num ) for bbox, score, class_name, feature in
                       zip( bboxes, scores, names,
                            features )]  # [No of BB per frame] deep_sort.detection.Detection object
 
@@ -254,6 +257,7 @@ class YOLOv7_DeepSORT:
         self.tracker.predict()  # Call the tracker
         self.tracker.update( detections )  # updtate using Kalman Gain
 
+        tracked = [] # place holder for putting tracked objects
         for track in self.tracker.tracks:  # update new findings AKA tracks
             if not track.is_confirmed() or track.time_since_update > 1:
                 continue
@@ -269,14 +273,15 @@ class YOLOv7_DeepSORT:
             cv2.putText( frame, class_name + " : " + str( track.track_id ), (int( bbox[0] ), int( bbox[1] - 11 )), 0,
                          0.6, (255, 255, 255), 1, lineType=cv2.LINE_AA )
 
-            if len( track.history ) > 2:
-                drawn_track = [cv2.line( frame, (int( track.history[i][0] ),
-                                                 int( track.history[i][1] )),
-                                         (int( track.history[i + 1][0] ),
-                                          int( track.history[i + 1][1] )),
-                                         color, thickness=2 )
-                               for i, _ in enumerate( track.history )
-                               if i < len( track.history ) - 1]
+            drawn_track = [cv2.line( frame, (int( track.history[i][0] ),
+                                             int( track.history[i][1] )),
+                                     (int( track.history[i + 1][0] ),
+                                      int( track.history[i + 1][1] )),
+                                     color, thickness=2 )
+                           for i, _ in enumerate( track.history )
+                           if i < len( track.history ) - 1]
+            
+            tracked.append(track.detection)
 
             if verbose == 2:
                 print( "Tracker ID: {}, Class: {},  BBox Coords (xmin, ymin, xmax, ymax): {}".format(
@@ -293,8 +298,8 @@ class YOLOv7_DeepSORT:
                     f"Processed frame no: {frame_num} || Current FPS: {round( fps, 2 )} || Objects tracked: {count}" )
 
         result = np.asarray( frame )
-        cv2.putText( frame, "Frame: " + str( frame_num ), (5,5), 0,
+        cv2.putText( frame, "Frame: " + str( frame_num ), (5, 15), 0,
                      0.6, (0, 0, 0), 1, lineType=cv2.LINE_AA )
         result = cv2.cvtColor( frame, cv2.COLOR_RGB2BGR )
 
-        return result, detections
+        return result, tracked

@@ -2,7 +2,7 @@
 import numpy as np
 
 
-class Detection(object):
+class Detection( object ):
     """
     This class represents a bounding box detection in a single image.
 
@@ -28,11 +28,13 @@ class Detection(object):
 
     """
 
-    def __init__(self, tlwh, confidence, class_name, feature):
-        self.tlwh = np.asarray(tlwh, dtype=float)
-        self.confidence = float(confidence)
+    def __init__(self, tlwh, confidence, class_name, feature, frame_num=0, track_id=0):
+        self.tlwh = np.asarray( tlwh, dtype=float )
+        self.confidence = float( confidence )
         self.class_name = class_name
-        self.feature = np.asarray(feature, dtype=float)
+        self.feature = np.asarray( feature, dtype=float )
+        self.frame_num = frame_num
+        self.track_id = track_id
 
     def get_class(self):
         return self.class_name
@@ -53,3 +55,7 @@ class Detection(object):
         ret[:2] += ret[2:] / 2
         ret[2] /= ret[3]
         return ret
+
+    def assign_id(self, track_id):
+        """Given an id when the detection is tracked"""
+        self.track_id = track_id

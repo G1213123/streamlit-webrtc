@@ -64,7 +64,7 @@ class Track:
     """
 
     def __init__(self, mean, covariance, track_id, n_init, max_age,
-                 feature=None, class_name=None):
+                 detection):
         self.mean = mean
         self.covariance = covariance
         self.track_id = track_id
@@ -74,13 +74,14 @@ class Track:
         self.history = []
 
         self.state = TrackState.Tentative
-        self.features = []
-        if feature is not None:
-            self.features.append(feature)
 
+        self.detection = []
+        self.features = []
+        self.features.append(detection.feature)
         self._n_init = n_init
         self._max_age = max_age
-        self.class_name = class_name
+        self.class_name = detection.class_name
+        self.conf = detection.confidence
 
     def to_tlwh(self):
         """Get current position in bounding box format `(top left x, top left y,
@@ -143,6 +144,10 @@ class Track:
         self.mean, self.covariance = kf.update(
             self.mean, self.covariance, detection.to_xyah())
         self.features.append(detection.feature)
+
+        if self.state == TrackState.Confirmed:
+            detection.assign_id(self.track_id)
+            self.detection.append(detection)
 
         self.hits += 1
         self.time_since_update = 0
