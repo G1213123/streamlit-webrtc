@@ -13,7 +13,5 @@ DEBUG = False
 
 STYLES = {
     "yolov7-tiny": "yolov7-tiny.pt",
-    "yolov7": "yolov7.pt",
-    "yolov7x": "yolov7x.pt",
 }
 
