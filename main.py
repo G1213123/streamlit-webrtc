@@ -69,7 +69,7 @@ def video_object_detection(variables):
         icounter = ic.st_IntersectCounter( image, width, height )
 
         # size limited by streamlit cloud service (superseded)
-        if width > 1920 or height > 1080:
+        if max(width, height) > 1920 or min(width, height) > 1080:
             st.warning( f"File resolution [{width}x{height}] exceeded limit [1920x1080], "
                         f"please consider scale down the video", icon="⚠️" )
         else:
