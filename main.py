@@ -157,6 +157,11 @@ def video_object_detection(variables):
                         st.dataframe( result_df, use_container_width=True )
                 icounter.show_counter_results()
 
+@st.cache
+def load_model (weight, conf):
+    detector = detection_helpers.Detector( conf )
+    detector.load_model( 'weights/' + config.STYLES[weight], trace=False )
+    return detector
 
 def live_object_detection(variables):
     """
@@ -166,8 +171,7 @@ def live_object_detection(variables):
 
     # init frame counter, object detector, tracker and passing object counter
     frame_num = fc.FrameCounter()
-    detector = detection_helpers.Detector( confidence_threshold )
-    detector.load_model( 'weights/' + config.STYLES[weight], trace=False )
+    detector = load_model (weight, confidence_threshold)
     deepsort_tracker = bridge_wrapper.YOLOv7_DeepSORT(
         reID_model_path="./deep_sort/model_weights/mars-small128.pb", detector=detector,
         max_iou_distance=iou_thres, max_age=track_age, n_init=track_hits )
