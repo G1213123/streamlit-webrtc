@@ -204,7 +204,8 @@ def live_object_detection(variables):
 
     # public-stun-list.txt
     # https://gist.github.com/mondain/b0ec1cf5f60ae726202e
-    servers = [{"url": "stun:stun.l.google.com:19302"}]
+    #servers = [{"url": "stun:stun.l.google.com:19302"}]
+    servers=[]
     if 'URL' in st.secrets:
         servers.append( {"urls": st.secrets['URL'],
                          "username": st.secrets['USERNAME'],
