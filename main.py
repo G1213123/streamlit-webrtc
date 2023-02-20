@@ -1,6 +1,5 @@
-import bridge_wrapper
+from helpers import bridge_wrapper, detection_helpers
 import config
-import detection_helpers
 from components import intersect_counter as ic, frame_counter as fc, variables_panel as vp, session_result
 
 import platform
