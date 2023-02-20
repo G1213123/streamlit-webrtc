@@ -15,6 +15,8 @@ import cv2
 import numpy as np
 from io import BytesIO
 import streamlit as st
+import sys
+sys.setrecursionlimit(4000)
 
 from streamlit_webrtc import (
     RTCConfiguration,
@@ -283,18 +285,19 @@ if __name__ == "__main__":
 
     DEBUG = config.DEBUG
 
-    logging.basicConfig(
-        format="[%(asctime)s] %(levelname)7s from %(name)s in %(pathname)s:%(lineno)d: "
-               "%(message)s",
-        force=True,
-    )
+    if DEBUG:
+        logging.basicConfig(
+            format="[%(asctime)s] %(levelname)7s from %(name)s in %(pathname)s:%(lineno)d: "
+                   "%(message)s",
+            force=True,
+        )
 
-    logger.setLevel( level=logging.DEBUG if DEBUG else logging.INFO )
+        logger.setLevel( level=logging.DEBUG if DEBUG else logging.INFO )
 
-    st_webrtc_logger = logging.getLogger( "streamlit_webrtc" )
-    st_webrtc_logger.setLevel( logging.DEBUG )
+        st_webrtc_logger = logging.getLogger( "streamlit_webrtc" )
+        st_webrtc_logger.setLevel( logging.DEBUG )
 
-    fsevents_logger = logging.getLogger( "fsevents" )
-    fsevents_logger.setLevel( logging.WARNING )
+        fsevents_logger = logging.getLogger( "fsevents" )
+        fsevents_logger.setLevel( logging.WARNING )
 
     main()
