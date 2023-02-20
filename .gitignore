@@ -1,9 +1,12 @@
-models/
+models/*.onnx
 runs/
 storage/
 venv/
 ffmpeg/
 .idea/
+./weights/yolov7.pt
+/weights/yolov7.pt
+
 
 .streamlit/
 *.pt
