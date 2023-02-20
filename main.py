@@ -15,8 +15,10 @@ import cv2
 import numpy as np
 from io import BytesIO
 import streamlit as st
+from aiortc.contrib.media import MediaPlayer
 import sys
-sys.setrecursionlimit(4000)
+
+sys.setrecursionlimit( 4000 )
 
 from streamlit_webrtc import (
     RTCConfiguration,
@@ -26,7 +28,6 @@ from streamlit_webrtc import (
 
 st.set_page_config( layout="wide" )
 logger = logging.getLogger( __name__ )
-
 
 
 def video_object_detection(variables):
@@ -71,7 +72,7 @@ def video_object_detection(variables):
         icounter = ic.st_IntersectCounter( image, width, height )
 
         # size limited by streamlit cloud service (superseded)
-        if max(width, height) > 1920 or min(width, height) > 1080:
+        if max( width, height ) > 1920 or min( width, height ) > 1080:
             st.warning( f"File resolution [{width}x{height}] exceeded limit [1920x1080], "
                         f"please consider scale down the video", icon="⚠️" )
         else:
@@ -159,11 +160,13 @@ def video_object_detection(variables):
                         st.dataframe( result_df, use_container_width=True )
                 icounter.show_counter_results()
 
+
 @st.cache
-def load_model (weight, conf):
+def load_model(weight, conf):
     detector = detection_helpers.Detector( conf )
     detector.load_model( 'weights/' + config.STYLES[weight], trace=False )
     return detector
+
 
 def live_object_detection(variables):
     """
@@ -173,7 +176,7 @@ def live_object_detection(variables):
 
     # init frame counter, object detector, tracker and passing object counter
     frame_num = fc.FrameCounter()
-    detector = load_model (weight, confidence_threshold)
+    detector = load_model( weight, confidence_threshold )
     deepsort_tracker = bridge_wrapper.YOLOv7_DeepSORT(
         reID_model_path="./deep_sort/model_weights/mars-small128.pb", detector=detector,
         max_iou_distance=iou_thres, max_age=track_age, n_init=track_hits )
@@ -191,9 +194,9 @@ def live_object_detection(variables):
         frame = frame.to_ndarray( format="bgr24" )
 
         # Detect, track and counter the intersect of objects here
-        image, result = deepsort_tracker.track_video_stream( frame, frame_num( 1 ))
+        image, result = deepsort_tracker.track_video_stream( frame, frame_num( 1 ) )
         if icounter is not None:
-            if len(icounter)>0:
+            if len( icounter ) > 0:
                 image = st_icounter.update_counters( deepsort_tracker.tracker.tracks, image, icounter )
 
         # NOTE: This `recv` method is called in another thread,
@@ -206,21 +209,44 @@ def live_object_detection(variables):
 
     # public-stun-list.txt
     # https://gist.github.com/mondain/b0ec1cf5f60ae726202e
-    servers = [] #[{"url": "stun:stun.l.google.com:19302"}]
+    servers = [{"url": "stun:stun.l.google.com:19302"}]
     if 'URL' in st.secrets:
         servers.append( {"urls": st.secrets['URL'],
                          "username": st.secrets['USERNAME'],
-                         "credential": st.secrets['CREDENTIAL'],                         } )
+                         "credential": st.secrets['CREDENTIAL'], } )
     RTC_CONFIGURATION = RTCConfiguration( {"iceServers": servers} )
 
-    webrtc_ctx = webrtc_streamer(
-        key="object-detection",
-        mode=WebRtcMode.SENDRECV,
-        rtc_configuration=RTC_CONFIGURATION,  # when deploy on remote host need stun server for camera connection
-        video_frame_callback=frame_callback,
-        media_stream_constraints={"video": True, "audio": False},
-        async_processing=True,
-    )
+    # RTSP video source
+    if st.checkbox( 'RTSP' ):
+        url = st.text_input( 'RTSP URL' )
+        media_file_info = {
+            "url": url,
+            "type": "video",}
+
+        def create_player():
+            return MediaPlayer( media_file_info["url"] )
+
+        webrtc_ctx = webrtc_streamer(
+            key="object-detection",
+            mode=WebRtcMode.RECVONLY,
+            rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+            media_stream_constraints={
+                "video": media_file_info["type"] == "video",
+                "audio": media_file_info["type"] == "audio",
+            },
+            player_factory=create_player,
+            video_frame_callback=frame_callback,
+        )
+
+    else:
+        webrtc_ctx = webrtc_streamer(
+            key="object-detection",
+            mode=WebRtcMode.SENDRECV,
+            rtc_configuration=RTC_CONFIGURATION,  # when deploy on remote host need stun server for camera connection
+            video_frame_callback=frame_callback,
+            media_stream_constraints={"video": True, "audio": False},
+            async_processing=True,
+        )
 
     # capture image for the counter setup container
     if webrtc_ctx.state.playing:
@@ -239,7 +265,7 @@ def live_object_detection(variables):
         while True:
             try:
                 result = result_queue.get( timeout=1.0 )
-                labels_placeholder.dataframe( session_result.result_to_df(result), use_container_width=True )
+                labels_placeholder.dataframe( session_result.result_to_df( result ), use_container_width=True )
             except queue.Empty:
                 result = None
             if st_icounter is not None:
