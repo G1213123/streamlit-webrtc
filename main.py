@@ -228,7 +228,7 @@ def live_object_detection(variables):
         webrtc_ctx = webrtc_streamer(
             key="object-detection",
             mode=WebRtcMode.RECVONLY,
-            #rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+            rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
             media_stream_constraints={
                 "video": media_file_info["type"] == "video",
                 "audio": media_file_info["type"] == "audio",
