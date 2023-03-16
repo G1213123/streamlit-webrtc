@@ -26,7 +26,7 @@ from deep_sort.tracker import Tracker
 
 # import from helpers
 from tracking_helpers import read_class_names, create_box_encoder
-from detection_helpers import *
+#from detection_helpers import *
 
 # load configuration for object detector
 config = ConfigProto()
