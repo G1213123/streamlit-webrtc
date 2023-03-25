@@ -7,7 +7,7 @@ ffmpeg/
 ./weights/yolov7.pt
 /weights/yolov7.pt
 
-
+# Streamlit related files
 .streamlit/
 *.pt
 *.toml
