@@ -16,6 +16,7 @@ from io import BytesIO
 import streamlit as st
 from aiortc.contrib.media import MediaPlayer
 import sys
+from yolox.tracker.byte_tracker import BYTETracker
 
 sys.setrecursionlimit( 4000 )
 
@@ -106,9 +107,7 @@ def video_object_detection(variables):
                 # init object detector and tracker
                 detector = detection_helpers.Detector( confidence_threshold )
                 detector.load_model( 'weights/' + config.STYLES[weight], trace=False )
-                deepsort_tracker = bridge_wrapper.YOLOv7_DeepSORT(
-                    reID_model_path="./deep_sort/model_weights/mars-small128.pb", detector=detector,
-                    max_iou_distance=iou_thres, max_age=track_age, n_init=track_hits )
+                deepsort_tracker = BYTETracker( )
                 frame_num = fc.FrameCounter()
 
                 # analysis per frame here
@@ -120,8 +119,10 @@ def video_object_detection(variables):
                     except Exception as e:
                         print( e )
                         continue
-                    image, result = deepsort_tracker.track_video_stream( frame, frame_num( 1 ), verbose=1 )
-                    image = icounter.update_counters( deepsort_tracker.tracker.tracks, image )
+                    img, result = detector.detect(frame)
+
+                    deepsort_tracker.update( result, frame.shape, img.shape )
+                    image = icounter.update_counters( deepsort_tracker.tracked_stracks, img )
                     # Update object localizer
                     # image, result = track_and_annotate_detections( frame, detections, sort_tracker,
                     #                                               st.session_state.counters, progress( 0 ) )
@@ -281,8 +282,8 @@ def main():
     st.header( "Object Detecting and Tracking demo" )
 
     pages = {
-        "Real time object detection (sendrecv)": live_object_detection,
         "Upload Video for detection": video_object_detection,
+        "Real time object detection (sendrecv)": live_object_detection,
     }
     page_titles = pages.keys()
 

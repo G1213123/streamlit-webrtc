@@ -87,3 +87,11 @@ validators==0.20.0
 watchdog==2.2.1
 pyyaml
 zipp==3.11.0
+thop
+ninja
+tabulate
+tensorboard
+lap
+motmetrics
+filterpy
+h5py

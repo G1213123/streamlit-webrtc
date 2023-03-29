@@ -101,9 +101,9 @@ class Detector:
                     plot_one_box(xyxy, im0, label=label, color=self.colors[int(cls)], line_thickness=1)
                     
         
-            return im0 if plot_bb else det.detach().cpu().numpy()
+            return im0, det if plot_bb else det.detach().cpu().numpy()
 
-        return im0 if plot_bb else None # just in case there's no detection, return the original image. For tracking purpose plot_bb has to be False always
+        return im0, None if plot_bb else None # just in case there's no detection, return the original image. For tracking purpose plot_bb has to be False always
         
 
     
