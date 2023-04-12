@@ -16,29 +16,54 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 
-from tensorflow.compat.v1 import \
-    ConfigProto  # DeepSORT official implementation uses tf1.x so we have to do some modifications to avoid errors
-
 # deep sort imports
 from deep_sort import preprocessing, nn_matching
 from deep_sort.detection import Detection
 from deep_sort.tracker import Tracker
 
+# byte track imports
+from yolox.tracker.byte_tracker import BYTETracker
+
 # import from helpers
 from helpers.tracking_helpers import read_class_names, create_box_encoder
 from helpers.detection_helpers import *
 
+
 # load configuration for object detector
-config = ConfigProto()
-config.gpu_options.allow_growth = True
+# config = ConfigProto()
+# config.gpu_options.allow_growth = True
 
+CLASS = read_class_names()
 
-class YOLOv7_DeepSORT:
+def read_class_names():
     '''
-    Class to Wrap ANY detector  of YOLO type with DeepSORT
+    Raad COCO classes names
+    '''
+    classes = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light',
+               'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow',
+               'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
+               'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard',
+               'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple',
+               'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
+               'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard',
+               'cell phone',
+               'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors',
+               'teddy bear',
+               'hair drier', 'toothbrush']
+
+    return dict( zip( range( len( classes ) ), classes ) )
+
+
+# Store the color in a NumPy array
+colors = [np.random.randint(low=0, high=256, size=3).tolist() for i in range(1000)]
+
+
+class YOLOv7_Byte:
+    '''
+    Class to Wrap ANY detector  of YOLO type with ByteTrack
     '''
 
-    def __init__(self, reID_model_path: str, detector, max_cosine_distance: float = 0.4, nn_budget: float = None,
+    def __init__(self, detector, max_cosine_distance: float = 0.4, nn_budget: float = None,
                  nms_max_overlap: float = 1.0,
                  coco_names_path: str = "./io_data/input/classes/coco.names",
                  max_iou_distance=0.7, max_age=75, n_init=3):
@@ -52,17 +77,11 @@ class YOLOv7_DeepSORT:
             coco_file_path: File wich contains the path to coco naames
         '''
         self.detector = detector
-        self.coco_names_path = coco_names_path
-        self.nms_max_overlap = nms_max_overlap
+        self.tracker = BYTETracker()  # initialize tracker
         self.class_names = read_class_names()
+        self.nms_max_overlap = nms_max_overlap
 
-        # initialize deep sort
-        self.encoder = create_box_encoder( reID_model_path, batch_size=1 )
-        metric = nn_matching.NearestNeighborDistanceMetric( "cosine", max_cosine_distance,
-                                                            nn_budget )  # calculate cosine distance metric
-        self.tracker = Tracker( metric, max_iou_distance, max_age, n_init )  # initialize tracker
-
-    def track_video(self, video: str, output: str, skip_frames: int = 0, show_live: bool = False,
+    def track_video(self, video: str, output: str or object, skip_frames: int = 0, show_live: bool = False,
                     count_objects: bool = False, verbose: int = 0):
         '''
         Track any given webcam or video
@@ -80,7 +99,7 @@ class YOLOv7_DeepSORT:
             vid = cv2.VideoCapture( video )
 
         out = None
-        if output:  # get video ready to save locally if flag is set
+        if type( output ) == str:  # get video ready to save locally if flag is set
             width = int( vid.get( cv2.CAP_PROP_FRAME_WIDTH ) )  # by default VideoCapture returns float instead of int
             height = int( vid.get( cv2.CAP_PROP_FRAME_HEIGHT ) )
             fps = int( vid.get( cv2.CAP_PROP_FPS ) )
@@ -88,6 +107,8 @@ class YOLOv7_DeepSORT:
             out = cv2.VideoWriter( output, codec, fps, (width, height) )
 
         frame_num = 0
+        all_detections = []
+
         while True:  # while video is running
             return_value, frame = vid.read()
             if not return_value:
@@ -99,70 +120,49 @@ class YOLOv7_DeepSORT:
             if verbose >= 1: start_time = time.time()
 
             # -----------------------------------------PUT ANY DETECTION MODEL HERE -----------------------------------------------------------------
-            yolo_dets = self.detector.detect( frame.copy(), plot_bb=False )  # Get the detections
+            _, yolo_dets = self.detector.detect( frame.copy(), plot_bb=False )  # Get the detections
             frame = cv2.cvtColor( frame, cv2.COLOR_BGR2RGB )
 
             if yolo_dets is None:
-                bboxes = []
-                scores = []
-                classes = []
-                num_objects = 0
-
-            else:
-                bboxes = yolo_dets[:, :4]
-                bboxes[:, 2] = bboxes[:, 2] - bboxes[:, 0]  # convert from xyxy to xywh
-                bboxes[:, 3] = bboxes[:, 3] - bboxes[:, 1]
-
-                scores = yolo_dets[:, 4]
-                classes = yolo_dets[:, -1]
-                num_objects = bboxes.shape[0]
+                yolo_dets = np.zeros(shape=(1, 6))
             # ---------------------------------------- DETECTION PART COMPLETED ---------------------------------------------------------------------
 
-            names = []
-            for i in range( num_objects ):  # loop through objects and use class index to get class name
-                class_indx = int( classes[i] )
-                class_name = self.class_names[class_indx]
-                names.append( class_name )
+            # names = []
+            # for i in range( num_objects ):  # loop through objects and use class index to get class name
+            #    class_indx = int( classes[i] )
+            #    class_name = self.class_names[class_indx]
+            #    names.append( class_name )
+            #
+            # names = np.array( names )
+            # count = len( names )
 
-            names = np.array( names )
-            count = len( names )
+            # if count_objects:
+            #    cv2.putText( frame, "Objects being tracked: {}".format( count ), (5, 35),
+            #                 cv2.FONT_HERSHEY_COMPLEX_SMALL, 1.5, (0, 0, 0), 2 )
 
-            if count_objects:
-                cv2.putText( frame, "Objects being tracked: {}".format( count ), (5, 35),
-                             cv2.FONT_HERSHEY_COMPLEX_SMALL, 1.5, (0, 0, 0), 2 )
+            all_detections.extend( yolo_dets )
 
-            # ---------------------------------- DeepSORT tacker work starts here ------------------------------------------------------------
-            features = self.encoder( frame,
-                                     bboxes )  # encode detections and feed to tracker. [No of BB / detections per frame, embed_size]
-            detections = [Detection( bbox, score, class_name, feature, frame_num ) for bbox, score, class_name, feature
-                          in
-                          zip( bboxes, scores, names,
-                               features )]  # [No of BB per frame] deep_sort.detection.Detection object
+            # self.tracker.predict()  # Call the tracker
+            self.tracker.update( yolo_dets, frame.shape[:2], frame.shape[:2] )  # updtate using Kalman Gain
 
-            cmap = plt.get_cmap( 'tab20b' )  # initialize color map
-            colors = [cmap( i )[:3] for i in np.linspace( 0, 1, 20 )]
-
-            boxs = np.array( [d.tlwh for d in detections] )  # run non-maxima supression below
-            scores = np.array( [d.confidence for d in detections] )
-            classes = np.array( [d.class_name for d in detections] )
-            indices = preprocessing.non_max_suppression( boxs, classes, self.nms_max_overlap, scores )
-            detections = [detections[i] for i in indices]
-
-            self.tracker.predict()  # Call the tracker
-            self.tracker.update( detections )  # updtate using Kalman Gain
-
-            for track in self.tracker.tracks:  # update new findings AKA tracks
-                if not track.is_confirmed() or track.time_since_update > 1:
+            for track in self.tracker.tracked_stracks:  # update new findings AKA tracks
+                if track.time_since_update > 1:
                     continue
-                bbox = track.to_tlbr()
-                class_name = track.get_class()
+                bbox = track.tlbr
+                class_name = CLASS[track.classes]
+                count = len(self.tracker.tracked_stracks)
 
                 color = colors[int( track.track_id ) % len( colors )]  # draw bbox on screen
-                color = [i * 255 for i in color]
-                cv2.rectangle( frame, (int( bbox[0] ), int( bbox[1] )), (int( bbox[2] ), int( bbox[3] )), color, 2 )
+                cv2.rectangle( frame, (int( bbox[0] ), int( bbox[1] )), (int( bbox[2] ), int( bbox[3] )), color,
+                               2 )
                 cv2.rectangle( frame, (int( bbox[0] ), int( bbox[1] - 30 )), (
                     int( bbox[0] ) + (len( class_name ) + len( str( track.track_id ) )) * 17, int( bbox[1] )), color,
                                -1 )
+                for st in self.tracker.tracked_stracks:
+                    if len(st.history) > 2:
+                        for i in range(1, len(st.history)):
+                            p0, p1 = st.history[i - 1][:2], st.history[i][:2]
+                            cv2.line(frame, (int(p0[0]), int(p0[1])), (int(p1[0]), int(p1[1])), color, 2)
                 cv2.putText( frame, class_name + " : " + str( track.track_id ), (int( bbox[0] ), int( bbox[1] - 11 )),
                              0, 0.6, (255, 255, 255), 1, lineType=cv2.LINE_AA )
 
@@ -180,10 +180,12 @@ class YOLOv7_DeepSORT:
                     print(
                         f"Processed frame no: {frame_num} || Current FPS: {round( fps, 2 )} || Objects tracked: {count}" )
 
-            result = np.asarray( frame )
             result = cv2.cvtColor( frame, cv2.COLOR_RGB2BGR )
 
-            if output: out.write( result )  # save output video
+            if type( output ) == str:
+                out.write( result )  # save output video
+            else:
+                output.stdin.write( cv2.cvtColor( result, cv2.COLOR_BGR2RGB ).astype( np.uint8 ).tobytes() )
 
             if show_live:
                 cv2.imshow( "Output Video", result )
@@ -257,7 +259,7 @@ class YOLOv7_DeepSORT:
         self.tracker.predict()  # Call the tracker
         self.tracker.update( detections )  # updtate using Kalman Gain
 
-        tracked = [] # place holder for putting tracked objects
+        tracked = []  # place holder for putting tracked objects
         for track in self.tracker.tracks:  # update new findings AKA tracks
             if not track.is_confirmed() or track.time_since_update > 1:
                 continue
@@ -280,8 +282,8 @@ class YOLOv7_DeepSORT:
                                      color, thickness=2 )
                            for i, _ in enumerate( track.history )
                            if i < len( track.history ) - 1]
-            
-            tracked.append(track.detection)
+
+            tracked.append( track.detection )
 
             if verbose == 2:
                 print( "Tracker ID: {}, Class: {},  BBox Coords (xmin, ymin, xmax, ymax): {}".format(

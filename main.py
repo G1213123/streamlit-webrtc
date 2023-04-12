@@ -16,7 +16,7 @@ from io import BytesIO
 import streamlit as st
 from aiortc.contrib.media import MediaPlayer
 import sys
-from yolox.tracker.byte_tracker import BYTETracker
+
 
 sys.setrecursionlimit( 4000 )
 
@@ -61,7 +61,7 @@ def video_object_detection(variables):
         tfile = tempfile.NamedTemporaryFile( delete=True )
         tfile.write( file.read() )
         cap = cv2.VideoCapture( tfile.name )
-        tfile.close()
+
 
         width, height = int( cap.get( cv2.CAP_PROP_FRAME_WIDTH ) ), int( cap.get( cv2.CAP_PROP_FRAME_HEIGHT ) )
         fps = cap.get( cv2.CAP_PROP_FPS )
@@ -107,31 +107,33 @@ def video_object_detection(variables):
                 # init object detector and tracker
                 detector = detection_helpers.Detector( confidence_threshold )
                 detector.load_model( 'weights/' + config.STYLES[weight], trace=False )
-                deepsort_tracker = BYTETracker( )
+                deepsort_tracker = bridge_wrapper.YOLOv7_Byte( detector)
                 frame_num = fc.FrameCounter()
 
+                deepsort_tracker.track_video(tfile.name, output=process)
+
                 # analysis per frame here
-                while cap.isOpened():
-                    try:
-                        ret, frame = cap.read()
-                        if not ret:
-                            break
-                    except Exception as e:
-                        print( e )
-                        continue
-                    img, result = detector.detect(frame)
-
-                    deepsort_tracker.update( result, frame.shape, img.shape )
-                    image = icounter.update_counters( deepsort_tracker.tracked_stracks, img )
-                    # Update object localizer
-                    # image, result = track_and_annotate_detections( frame, detections, sort_tracker,
-                    #                                               st.session_state.counters, progress( 0 ) )
-                    process.stdin.write( cv2.cvtColor( image, cv2.COLOR_BGR2RGB ).astype( np.uint8 ).tobytes() )
-                    st.session_state['result_list'].extend( result )
-
-                    # progress of analysis
-                    progress_bar.progress( progress( 1 ) / total_frame )
-                    progress_txt.caption( f'Analysing Video: {progress( 0 )} out of {total_frame} frames' )
+                #while cap.isOpened():
+                #    try:
+                #        ret, frame = cap.read()
+                #        if not ret:
+                #            break
+                #    except Exception as e:
+                #        print( e )
+                #        continue
+                #    img, result = detector.detect(frame, plot_bb=False)
+#
+                #    deepsort_tracker.update( result, frame.shape, img.shape )
+                #    image = icounter.update_counters( deepsort_tracker.tracked_stracks, img )
+                #    # Update object localizer
+                #    # image, result = track_and_annotate_detections( frame, detections, sort_tracker,
+                #    #                                               st.session_state.counters, progress( 0 ) )
+                #    process.stdin.write( cv2.cvtColor( image, cv2.COLOR_BGR2RGB ).astype( np.uint8 ).tobytes() )
+                #    st.session_state['result_list'].extend( result )
+#
+                #    # progress of analysis
+                #    progress_bar.progress( progress( 1 ) / total_frame )
+                #    progress_txt.caption( f'Analysing Video: {progress( 0 )} out of {total_frame} frames' )
 
                 process.stdin.close()
                 process.wait()

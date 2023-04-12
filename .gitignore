@@ -6,6 +6,7 @@ ffmpeg/
 .idea/
 ./weights/yolov7.pt
 /weights/yolov7.pt
+test/
 
 # Streamlit related files
 .streamlit/

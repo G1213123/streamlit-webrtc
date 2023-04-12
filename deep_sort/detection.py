@@ -28,11 +28,10 @@ class Detection( object ):
 
     """
 
-    def __init__(self, tlwh, confidence, class_name, feature, frame_num=0, track_id=0):
+    def __init__(self, tlwh, confidence, class_name, frame_num=0, track_id=0):
         self.tlwh = np.asarray( tlwh, dtype=float )
         self.confidence = float( confidence )
         self.class_name = class_name
-        self.feature = np.asarray( feature, dtype=float )
         self.frame_num = frame_num
         self.track_id = track_id
 
